@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
     }
     if (parser.parsed("seed")) params.set_random_seed(parser.get<uint64_t>("seed"));
 
-    std::vector<byte_vec> points;
+    std::vector<point> points;
 
     {
         std::ifstream in(parser.get<std::string>("byte_vectors_filename"), std::ios::binary);
@@ -43,11 +43,20 @@ int main(int argc, char** argv) {
         uint32_t num_points = 0;
         in.read(reinterpret_cast<char*>(&num_bytes_per_point), sizeof(uint32_t));
         in.read(reinterpret_cast<char*>(&num_points), sizeof(uint32_t));
-        points.resize(num_points, byte_vec(num_bytes_per_point));
+        points.resize(num_points, point(num_bytes_per_point));
+        // byte_vec vec;
+        // vec.reserve(num_bytes_per_point);
         for (uint32_t i = 0; i != num_points; ++i) {
             uint32_t dummy = 0;
             in.read(reinterpret_cast<char*>(&dummy), sizeof(dummy));  // discard set_size (4 bytes)
             in.read(reinterpret_cast<char*>(points[i].data()), num_bytes_per_point);
+            // vec.clear();
+            // for (uint32_t i = 0; i != num_bytes_per_point; ++i) {
+            //     uint8_t val;
+            //     in.read(reinterpret_cast<char*>(&val), 1);
+            //     vec.push_back(val);
+            // }
+            // points.push_back(vec);
         }
         in.close();
     }

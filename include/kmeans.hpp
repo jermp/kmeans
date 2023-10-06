@@ -7,40 +7,40 @@
 
 namespace kmeans {
 
-typedef std::vector<uint8_t> byte_vec;
 typedef float float_type;
+typedef std::vector<uint8_t> point;
+typedef std::vector<float_type> mean;
 
 namespace details {
 
 /*
     Calculate the square of the distance between two points.
 */
-uint64_t distance_squared(byte_vec const& x, byte_vec const& y) {
+template <typename T, typename Q>
+float_type distance_squared(std::vector<T> const& x, std::vector<Q> const& y) {
     assert(x.size() == y.size());
-    uint64_t d_squared = 0;
+    float_type d_squared = 0;
     for (uint64_t i = 0; i != x.size(); ++i) {
-        int64_t delta = int64_t(x[i]) - int64_t(y[i]);
+        float_type delta = float_type(x[i]) - float_type(y[i]);
         d_squared += delta * delta;
     }
     return d_squared;
 }
 
-float_type distance(byte_vec const& x, byte_vec const& y) {
-    return std::sqrt(distance_squared(x, y));
-}
+float_type distance(mean const& x, mean const& y) { return std::sqrt(distance_squared(x, y)); }
 
 /*
     Calculate the smallest distance between each of the data points and any of the input means.
 */
-std::vector<uint64_t> closest_distance(std::vector<byte_vec> const& means,
-                                       std::vector<byte_vec> const& points) {
-    std::vector<uint64_t> distances;
+std::vector<float_type> closest_distance(std::vector<mean> const& means,
+                                         std::vector<point> const& points) {
+    std::vector<float_type> distances;
     distances.resize(points.size());
 #pragma omp parallel for
     for (uint64_t i = 0; i != points.size(); ++i) {
-        uint64_t closest = distance_squared(points[i], means.front());
+        float_type closest = distance_squared(points[i], means.front());
         for (auto const& mean : means) {
-            uint64_t distance = distance_squared(points[i], mean);
+            float_type distance = distance_squared(points[i], mean);
             if (distance < closest) closest = distance;
         }
         distances[i] = closest;
@@ -52,13 +52,14 @@ std::vector<uint64_t> closest_distance(std::vector<byte_vec> const& means,
     This is an alternate initialization method based on the
     [kmeans++](https://en.wikipedia.org/wiki/K-means%2B%2B) initialization algorithm.
 */
-std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint32_t k,
-                                      uint64_t seed) {
+std::vector<mean> random_plusplus(std::vector<point> const& points, uint32_t k, uint64_t seed) {
     assert(k > 0);
     assert(points.size() > 0);
 
-    std::vector<byte_vec> means;
+    std::vector<mean> means;
     means.reserve(k);
+    mean m;
+    m.reserve(points.front().size());
 
     // Using a very simple PRBS generator, parameters selected according to
     // https://en.wikipedia.org/wiki/Linear_congruential_generator#Parameters_in_common_use
@@ -69,7 +70,9 @@ std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint3
     {
         std::uniform_int_distribution<uint64_t> uniform_generator(0, points.size() - 1);
         uint64_t index = uniform_generator(rand_engine);
-        means.push_back(points[index]);
+        auto const& point = points[index];
+        for (auto x : point) m.push_back(float_type(x));
+        means.push_back(m);
     }
 
     for (uint32_t i = 1; i != k; ++i) {
@@ -79,7 +82,10 @@ std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint3
         // Pick a random point weighted by the distance from existing means
         std::discrete_distribution<uint64_t> generator(distances.begin(), distances.end());
         uint64_t index = generator(rand_engine);
-        means.push_back(points[index]);
+        m.clear();
+        auto const& point = points[index];
+        for (auto x : point) m.push_back(float_type(x));
+        means.push_back(m);
     }
 
     // std::cout << "means are:\n";
@@ -94,7 +100,7 @@ std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint3
 /*
     Calculate the index of the mean a particular data point is closest to (euclidean distance)
 */
-uint64_t closest_mean(byte_vec const& point, std::vector<byte_vec> const& means) {
+uint64_t closest_mean(point const& point, std::vector<mean> const& means) {
     assert(!means.empty());
     float_type closest = distance_squared(point, means.front());
     uint64_t index = 0;
@@ -112,8 +118,8 @@ uint64_t closest_mean(byte_vec const& point, std::vector<byte_vec> const& means)
     Calculate the index of the mean each data point is closest to (euclidean distance).
     We assume there are less than 2^32 clusters.
 */
-std::vector<uint32_t> calculate_clusters(std::vector<byte_vec> const& points,
-                                         std::vector<byte_vec> const& means) {
+std::vector<uint32_t> calculate_clusters(std::vector<point> const& points,
+                                         std::vector<mean> const& means) {
     std::vector<uint32_t> clusters;
     clusters.resize(points.size());
 #pragma omp parallel for
@@ -127,33 +133,33 @@ std::vector<uint32_t> calculate_clusters(std::vector<byte_vec> const& points,
 /*
 Calculate means based on data points and their cluster assignments.
 */
-std::vector<byte_vec> calculate_means(std::vector<byte_vec> const& points,
-                                      std::vector<uint32_t> const& clusters,
-                                      std::vector<byte_vec> const& old_means, uint32_t k) {
+std::vector<mean> calculate_means(std::vector<point> const& points,
+                                  std::vector<uint32_t> const& clusters,
+                                  std::vector<mean> const& old_means, uint32_t k) {
     assert(clusters.size() == points.size());
 
     const uint64_t point_size = points.front().size();
-    std::vector<byte_vec> means(k, byte_vec(point_size, 0));
+    std::vector<mean> means(k, mean(point_size, 0.0));
     std::vector<uint32_t> count(k, 0);
 
-    for (uint64_t i = 0; i != clusters.size(); ++i) {
-        assert(clusters[i] < k);
-        count[clusters[i]] += 1;
-        uint32_t count_value = count[clusters[i]];
-        auto& mean = means[clusters[i]];
-        auto const& point = points[i];
-        for (uint64_t j = 0; j != point_size; ++j) {
-            float_type val = std::round(
-                (double(mean[j]) * (count_value > 1 ? count_value - 1 : 1) + double(point[j])) /
-                count_value);
-            assert(val >= 0.0 and val <= double(uint64_t(1) << 8 * sizeof(byte_vec::value_type)));
-            mean[j] = val;
-        }
-    }
+    // for (uint64_t i = 0; i != clusters.size(); ++i) {
+    //     assert(clusters[i] < k);
+    //     count[clusters[i]] += 1;
+    //     uint32_t count_value = count[clusters[i]];
+    //     auto& mean = means[clusters[i]];
+    //     auto const& point = points[i];
+    //     for (uint64_t j = 0; j != point_size; ++j) {
+    //         float_type val = std::round(
+    //             (double(mean[j]) * (count_value > 1 ? count_value - 1 : 1) + double(point[j])) /
+    //             count_value);
+    //         assert(val >= 0.0 and val <= double(uint64_t(1) << 8 *
+    //         sizeof(point::value_type))); mean[j] = val;
+    //     }
+    // }
 
-    for (size_t i = 0; i != k; ++i) {
-        if (count[i] == 0) means[i] = old_means[i];
-    }
+    // for (size_t i = 0; i != k; ++i) {
+    //     if (count[i] == 0) means[i] = old_means[i];
+    // }
 
     // 3 7 10 20
     // 3 + 0 = 3 / 1 = 3
@@ -166,19 +172,18 @@ std::vector<byte_vec> calculate_means(std::vector<byte_vec> const& points,
     // 17* 1 + 8 = 25 / 2 = 12
     // 12*2 + 34 = 19
 
-    // for (size_t i = 0; i < clusters.size(); ++i) {
-    //     auto& mean = means[clusters[i]];
-    //     count[clusters[i]] += 1;
-    //     for (size_t j = 0; j != point_size; ++j) { mean[j] += points[i][j]; }
-    // }
-    // for (size_t i = 0; i < k; ++i) {
-    //     std::cout << "count[" << i << "]=" << count[i] << std::endl;
-    //     if (count[i] == 0) {
-    //         means[i] = old_means[i];
-    //     } else {
-    //         for (size_t j = 0; j != point_size; ++j) { means[i][j] /= count[i]; }
-    //     }
-    // }
+    for (size_t i = 0; i != clusters.size(); ++i) {
+        auto& mean = means[clusters[i]];
+        count[clusters[i]] += 1;
+        for (size_t j = 0; j != point_size; ++j) mean[j] += points[i][j];
+    }
+    for (size_t i = 0; i != k; ++i) {
+        if (count[i] == 0) {
+            means[i] = old_means[i];
+        } else {
+            for (size_t j = 0; j != point_size; ++j) means[i][j] /= count[i];
+        }
+    }
 
     // std::cout << "means are:\n";
     // for (auto const& mean : means) {
@@ -189,8 +194,7 @@ std::vector<byte_vec> calculate_means(std::vector<byte_vec> const& points,
     return means;
 }
 
-std::vector<float_type> deltas(std::vector<byte_vec> const& old_means,
-                               std::vector<byte_vec> const& means) {
+std::vector<float_type> deltas(std::vector<mean> const& old_means, std::vector<mean> const& means) {
     std::vector<float_type> distances;
     distances.reserve(means.size());
     assert(old_means.size() == means.size());
@@ -254,7 +258,7 @@ private:
     uint64_t m_rand_seed;
 };
 
-std::vector<uint32_t> kmeans_lloyd(std::vector<byte_vec> const& points,
+std::vector<uint32_t> kmeans_lloyd(std::vector<point> const& points,
                                    clustering_parameters const& parameters) {
     assert(parameters.get_k() > 0);               // k must be greater than zero
     assert(points.size() >= parameters.get_k());  // there must be at least k points
@@ -262,8 +266,8 @@ std::vector<uint32_t> kmeans_lloyd(std::vector<byte_vec> const& points,
     std::random_device rand_device;
     uint64_t seed = parameters.has_random_seed() ? parameters.get_random_seed() : rand_device();
 
-    std::vector<byte_vec> old_means;
-    std::vector<byte_vec> means = details::random_plusplus(points, parameters.get_k(), seed);
+    std::vector<mean> old_means;
+    std::vector<mean> means = details::random_plusplus(points, parameters.get_k(), seed);
 
     std::vector<uint32_t> clusters;
 
@@ -283,6 +287,8 @@ std::vector<uint32_t> kmeans_lloyd(std::vector<byte_vec> const& points,
              !(parameters.has_min_delta() and
                details::deltas_below_limit(details::deltas(old_means, means),
                                            parameters.get_min_delta())));
+
+    std::cerr << "terminated after " << iteration << " iterations" << std::endl;
 
     return clusters;
 }
