@@ -10,31 +10,27 @@ namespace kmeans {
 typedef std::vector<uint8_t> byte_vec;
 typedef float float_type;
 
-/*
-These functions are all private implementation details and shouldn't be referenced outside of this
-file.
-*/
 namespace details {
 
 /*
-Calculate the square of the distance between two points.
+    Calculate the square of the distance between two points.
 */
-uint64_t distance_squared(byte_vec const& point_a, byte_vec const& point_b) {
-    assert(point_a.size() == point_b.size());
+uint64_t distance_squared(byte_vec const& x, byte_vec const& y) {
+    assert(x.size() == y.size());
     uint64_t d_squared = 0;
-    for (uint64_t i = 0; i != point_a.size(); ++i) {
-        int64_t delta = int64_t(point_a[i]) - int64_t(point_b[i]);
+    for (uint64_t i = 0; i != x.size(); ++i) {
+        int64_t delta = int64_t(x[i]) - int64_t(y[i]);
         d_squared += delta * delta;
     }
     return d_squared;
 }
 
-float_type distance(byte_vec const& point_a, byte_vec const& point_b) {
-    return std::sqrt(distance_squared(point_a, point_b));
+float_type distance(byte_vec const& x, byte_vec const& y) {
+    return std::sqrt(distance_squared(x, y));
 }
 
 /*
-Calculate the smallest distance between each of the data points and any of the input means.
+    Calculate the smallest distance between each of the data points and any of the input means.
 */
 std::vector<float_type> closest_distance(std::vector<byte_vec> const& means,
                                          std::vector<byte_vec> const& points) {
@@ -42,8 +38,8 @@ std::vector<float_type> closest_distance(std::vector<byte_vec> const& means,
     distances.reserve(points.size());
     for (auto const& point : points) {
         float_type closest = distance_squared(point, means.front());
-        for (auto& m : means) {
-            float_type distance = distance_squared(point, m);
+        for (auto const& mean : means) {
+            float_type distance = distance_squared(point, mean);
             if (distance < closest) closest = distance;
         }
         distances.push_back(closest);
@@ -52,8 +48,8 @@ std::vector<float_type> closest_distance(std::vector<byte_vec> const& means,
 }
 
 /*
-This is an alternate initialization method based on the
-[kmeans++](https://en.wikipedia.org/wiki/K-means%2B%2B) initialization algorithm.
+    This is an alternate initialization method based on the
+    [kmeans++](https://en.wikipedia.org/wiki/K-means%2B%2B) initialization algorithm.
 */
 std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint32_t k,
                                       uint64_t seed) {
@@ -72,27 +68,16 @@ std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint3
     {
         std::uniform_int_distribution<uint64_t> uniform_generator(0, points.size() - 1);
         uint64_t index = uniform_generator(rand_engine);
-        // std::cout << "choosing first mean-0 as point of index " << index << std::endl;
         means.push_back(points[index]);
     }
 
     for (uint32_t i = 1; i != k; ++i) {
         // Calculate the distance to the closest mean for each data point
         auto distances = details::closest_distance(means, points);
-        // Pick a random point weighted by the distance from existing means
 
-        // TODO: This might convert floating point weights to ints, distorting the distribution for
-        // small weights
-        // #if !defined(_MSC_VER) || _MSC_VER >= 1900
+        // Pick a random point weighted by the distance from existing means
         std::discrete_distribution<float_type> generator(distances.begin(), distances.end());
-        // #else  // MSVC++ older than 14.0
-        //         input_size_t i = 0;
-        //         std::discrete_distribution<float_type> generator(
-        //             distances.size(), 0.0, 0.0, [&distances, &i](double) { return distances[i++];
-        //             });
-        // #endif
         uint64_t index = generator(rand_engine);
-        // std::cout << "choosing mean-" << i << " as point of index " << index << std::endl;
         means.push_back(points[index]);
     }
 
@@ -106,7 +91,7 @@ std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint3
 }
 
 /*
-Calculate the index of the mean a particular data point is closest to (euclidean distance)
+    Calculate the index of the mean a particular data point is closest to (euclidean distance)
 */
 uint64_t closest_mean(byte_vec const& point, std::vector<byte_vec> const& means) {
     assert(!means.empty());
@@ -123,19 +108,16 @@ uint64_t closest_mean(byte_vec const& point, std::vector<byte_vec> const& means)
 }
 
 /*
-Calculate the index of the mean each data point is closest to (euclidean distance).
-We assume there are less than 2^32 clusters.
+    Calculate the index of the mean each data point is closest to (euclidean distance).
+    We assume there are less than 2^32 clusters.
 */
 std::vector<uint32_t> calculate_clusters(std::vector<byte_vec> const& points,
                                          std::vector<byte_vec> const& means) {
     std::vector<uint32_t> clusters;
     clusters.reserve(points.size());
-    uint64_t count = 0;
     for (auto const& point : points) {
         uint32_t cluster_id = closest_mean(point, means);
-        // std::cout << "point-" << count << " assigned to cluster " << cluster_id << std::endl;
         clusters.push_back(cluster_id);
-        ++count;
     }
     return clusters;
 }
@@ -162,7 +144,7 @@ std::vector<byte_vec> calculate_means(std::vector<byte_vec> const& points,
             float_type val = std::round(
                 (double(mean[j]) * (count_value > 1 ? count_value - 1 : 1) + double(point[j])) /
                 count_value);
-            assert(val >= 0.0 and val <= 255.0);
+            assert(val >= 0.0 and val <= double(uint64_t(1) << 8 * sizeof(byte_vec::value_type)));
             mean[j] = val;
         }
     }
@@ -241,54 +223,52 @@ of optional parameters, including:
 class clustering_parameters {
 public:
     explicit clustering_parameters(uint32_t k)
-        : _k(k)
-        , _has_max_iter(false)
-        , _max_iter()
-        , _has_min_delta(false)
-        , _min_delta()
-        , _has_rand_seed(false)
-        , _rand_seed() {}
+        : m_k(k)
+        , m_has_max_iter(false)
+        , m_max_iter()
+        , m_has_min_delta(false)
+        , m_min_delta()
+        , m_has_rand_seed(false)
+        , m_rand_seed() {}
 
     void set_max_iteration(uint64_t max_iter) {
-        _max_iter = max_iter;
-        _has_max_iter = true;
+        m_max_iter = max_iter;
+        m_has_max_iter = true;
     }
 
     void set_min_delta(float_type min_delta) {
-        _min_delta = min_delta;
-        _has_min_delta = true;
+        m_min_delta = min_delta;
+        m_has_min_delta = true;
     }
 
     void set_random_seed(uint64_t rand_seed) {
-        _rand_seed = rand_seed;
-        _has_rand_seed = true;
+        m_rand_seed = rand_seed;
+        m_has_rand_seed = true;
     }
 
-    bool has_max_iteration() const { return _has_max_iter; }
-    bool has_min_delta() const { return _has_min_delta; }
-    bool has_random_seed() const { return _has_rand_seed; }
+    bool has_max_iteration() const { return m_has_max_iter; }
+    bool has_min_delta() const { return m_has_min_delta; }
+    bool has_random_seed() const { return m_has_rand_seed; }
 
-    uint32_t get_k() const { return _k; };
-    uint64_t get_max_iteration() const { return _max_iter; }
-    float_type get_min_delta() const { return _min_delta; }
-    uint64_t get_random_seed() const { return _rand_seed; }
+    uint32_t get_k() const { return m_k; };
+    uint64_t get_max_iteration() const { return m_max_iter; }
+    float_type get_min_delta() const { return m_min_delta; }
+    uint64_t get_random_seed() const { return m_rand_seed; }
 
 private:
-    uint32_t _k;
-    bool _has_max_iter;
-    uint64_t _max_iter;
-    bool _has_min_delta;
-    float_type _min_delta;
-    bool _has_rand_seed;
-    uint64_t _rand_seed;
+    uint32_t m_k;
+    bool m_has_max_iter;
+    uint64_t m_max_iter;
+    bool m_has_min_delta;
+    float_type m_min_delta;
+    bool m_has_rand_seed;
+    uint64_t m_rand_seed;
 };
 
 /*
-Implementation of k-means generic across the data type and the dimension of each data item. Expects
-the data to be a vector of fixed-size arrays. Generic parameters are the type of the base data (T)
-and the dimensionality of each data point (N). All points must have the same dimensionality.
 
-e.g. points of the form (X, Y, Z) would be N = 3.
+Implementation of k-means generic across the data type and the dimension of each data item.
+All points must have the same dimensionality.
 
 Takes a `clustering_parameters` struct for algorithm configuration. See the comments for the
 `clustering_parameters` struct for more information about the configuration values and how they
@@ -312,7 +292,6 @@ std::vector<uint32_t> kmeans_lloyd(std::vector<byte_vec> const& points,
     std::random_device rand_device;
     uint64_t seed = parameters.has_random_seed() ? parameters.get_random_seed() : rand_device();
 
-    // std::vector<byte_vec> old_old_means;
     std::vector<byte_vec> old_means;
     std::vector<byte_vec> means = details::random_plusplus(points, parameters.get_k(), seed);
 
@@ -322,16 +301,15 @@ std::vector<uint32_t> kmeans_lloyd(std::vector<byte_vec> const& points,
     uint64_t iteration = 0;
     do {
         clusters = details::calculate_clusters(points, means);
-        std::cout << "clusters: " << std::endl;
-        for (auto c : clusters) { std::cout << c << " "; }
-        std::cout << std::endl;
 
-        // old_old_means = old_means;
-        old_means = means;
+        // std::cout << "clusters: " << std::endl;
+        // for (auto c : clusters) { std::cout << c << " "; }
+        // std::cout << std::endl;
+
+        old_means = std::move(means);
         means = details::calculate_means(points, clusters, old_means, parameters.get_k());
         ++iteration;
-    } while (means != old_means /* and means != old_old_means */ and
-             !(parameters.has_max_iteration() and iteration == parameters.get_max_iteration()) and
+    } while (!(parameters.has_max_iteration() and iteration == parameters.get_max_iteration()) and
              !(parameters.has_min_delta() and
                details::deltas_below_limit(details::deltas(old_means, means),
                                            parameters.get_min_delta())));

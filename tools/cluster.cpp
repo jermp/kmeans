@@ -19,16 +19,24 @@ int main(int argc, char** argv) {
 
     auto k = parser.get<uint64_t>("k");
     if (k > (uint64_t(1) << 32)) {
-        std::cout << "Error: num. clusters cannot be more than 2^32." << std::endl;
+        std::cout << "Error: number of clusters cannot be more than 2^32." << std::endl;
         return 1;
     }
 
     clustering_parameters params(k);
     if (parser.parsed("max_iter")) params.set_max_iteration(parser.get<uint64_t>("max_iter"));
-    if (parser.parsed("min_delta")) params.set_min_delta(parser.get<uint64_t>("min_delta"));
+    if (parser.parsed("min_delta")) {
+        float_type d = parser.get<float_type>("min_delta");
+        if (d < 0) {
+            std::cout << "Error: min_delta cannot be < 0" << std::endl;
+            return 1;
+        }
+        params.set_min_delta(d);
+    }
     if (parser.parsed("seed")) params.set_random_seed(parser.get<uint64_t>("seed"));
 
     std::vector<byte_vec> points;
+
     {
         std::ifstream in(parser.get<std::string>("byte_vectors_filename"), std::ios::binary);
         uint32_t num_bytes_per_point = 0;
@@ -43,8 +51,10 @@ int main(int argc, char** argv) {
         }
         in.close();
     }
+
     auto labels = kmeans_lloyd(points, params);
 
+    std::cout << "labels:\n";
     for (auto l : labels) { std::cout << l << " "; }
     std::cout << std::endl;
 
