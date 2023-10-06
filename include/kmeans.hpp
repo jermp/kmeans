@@ -32,15 +32,15 @@ float_type distance(byte_vec const& x, byte_vec const& y) {
 /*
     Calculate the smallest distance between each of the data points and any of the input means.
 */
-std::vector<float_type> closest_distance(std::vector<byte_vec> const& means,
-                                         std::vector<byte_vec> const& points) {
-    std::vector<float_type> distances;
+std::vector<uint64_t> closest_distance(std::vector<byte_vec> const& means,
+                                       std::vector<byte_vec> const& points) {
+    std::vector<uint64_t> distances;
     distances.resize(points.size());
 #pragma omp parallel for
     for (uint64_t i = 0; i != points.size(); ++i) {
-        float_type closest = distance_squared(points[i], means.front());
+        uint64_t closest = distance_squared(points[i], means.front());
         for (auto const& mean : means) {
-            float_type distance = distance_squared(points[i], mean);
+            uint64_t distance = distance_squared(points[i], mean);
             if (distance < closest) closest = distance;
         }
         distances[i] = closest;
@@ -77,7 +77,7 @@ std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint3
         auto distances = details::closest_distance(means, points);
 
         // Pick a random point weighted by the distance from existing means
-        std::discrete_distribution<float_type> generator(distances.begin(), distances.end());
+        std::discrete_distribution<uint64_t> generator(distances.begin(), distances.end());
         uint64_t index = generator(rand_engine);
         means.push_back(points[index]);
     }
