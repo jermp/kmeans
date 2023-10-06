@@ -54,9 +54,7 @@ int main(int argc, char** argv) {
 
     auto labels = kmeans_lloyd(points, params);
 
-    std::cout << "labels:\n";
-    for (auto l : labels) { std::cout << l << " "; }
-    std::cout << std::endl;
+    for (auto l : labels) std::cout << l << " ";
 
     return 0;
 }

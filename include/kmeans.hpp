@@ -35,14 +35,15 @@ float_type distance(byte_vec const& x, byte_vec const& y) {
 std::vector<float_type> closest_distance(std::vector<byte_vec> const& means,
                                          std::vector<byte_vec> const& points) {
     std::vector<float_type> distances;
-    distances.reserve(points.size());
-    for (auto const& point : points) {
-        float_type closest = distance_squared(point, means.front());
+    distances.resize(points.size());
+#pragma omp parallel for
+    for (uint64_t i = 0; i != points.size(); ++i) {
+        float_type closest = distance_squared(points[i], means.front());
         for (auto const& mean : means) {
-            float_type distance = distance_squared(point, mean);
+            float_type distance = distance_squared(points[i], mean);
             if (distance < closest) closest = distance;
         }
-        distances.push_back(closest);
+        distances[i] = closest;
     }
     return distances;
 }
@@ -114,10 +115,11 @@ uint64_t closest_mean(byte_vec const& point, std::vector<byte_vec> const& means)
 std::vector<uint32_t> calculate_clusters(std::vector<byte_vec> const& points,
                                          std::vector<byte_vec> const& means) {
     std::vector<uint32_t> clusters;
-    clusters.reserve(points.size());
-    for (auto const& point : points) {
-        uint32_t cluster_id = closest_mean(point, means);
-        clusters.push_back(cluster_id);
+    clusters.resize(points.size());
+#pragma omp parallel for
+    for (uint64_t i = 0; i != points.size(); ++i) {
+        uint32_t cluster_id = closest_mean(points[i], means);
+        clusters[i] = cluster_id;
     }
     return clusters;
 }
@@ -207,19 +209,6 @@ bool deltas_below_limit(std::vector<float_type> const& deltas, float_type min_de
 
 }  // namespace details
 
-/*
-clustering_parameters is the configuration used for running the kmeans_lloyd algorithm.
-
-It requires a k value for initialization, and can subsequently be configured with your choice
-of optional parameters, including:
-* Maximum iteration count; the algorithm will terminate if it reaches this iteration count
-  before converging on a solution. The results returned are the means and cluster assignments
-  calculated in the last iteration before termination.
-* Minimum delta; the algorithm will terminate if the change in position of all means is
-  smaller than the specified distance.
-* Random seed; if present, this will be used in place of `std::random_device` for kmeans++
-  initialization. This can be used to ensure reproducible/deterministic behavior.
-*/
 class clustering_parameters {
 public:
     explicit clustering_parameters(uint32_t k)
@@ -264,25 +253,6 @@ private:
     bool m_has_rand_seed;
     uint64_t m_rand_seed;
 };
-
-/*
-
-Implementation of k-means generic across the data type and the dimension of each data item.
-All points must have the same dimensionality.
-
-Takes a `clustering_parameters` struct for algorithm configuration. See the comments for the
-`clustering_parameters` struct for more information about the configuration values and how they
-affect the algorithm.
-
-Returns a vector containing the cluster number (0 to k-1) for each corresponding element of the
-input data vector.
-
-Implementation details:
-This implementation of k-means uses [Lloyd's
-Algorithm](https://en.wikipedia.org/wiki/Lloyd%27s_algorithm) with the
-[kmeans++](https://en.wikipedia.org/wiki/K-means%2B%2B) used for initializing the means.
-
-*/
 
 std::vector<uint32_t> kmeans_lloyd(std::vector<byte_vec> const& points,
                                    clustering_parameters const& parameters) {
