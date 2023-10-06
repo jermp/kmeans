@@ -37,6 +37,8 @@ int main(int argc, char** argv) {
         in.read(reinterpret_cast<char*>(&num_points), sizeof(uint32_t));
         points.resize(num_points, byte_vec(num_bytes_per_point));
         for (uint32_t i = 0; i != num_points; ++i) {
+            uint32_t dummy = 0;
+            in.read(reinterpret_cast<char*>(&dummy), sizeof(dummy));  // discard set_size (4 bytes)
             in.read(reinterpret_cast<char*>(points[i].data()), num_bytes_per_point);
         }
         in.close();

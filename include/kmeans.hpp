@@ -71,7 +71,9 @@ std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint3
     // Select first mean at random from the set
     {
         std::uniform_int_distribution<uint64_t> uniform_generator(0, points.size() - 1);
-        means.push_back(points[uniform_generator(rand_engine)]);
+        uint64_t index = uniform_generator(rand_engine);
+        // std::cout << "choosing first mean-0 as point of index " << index << std::endl;
+        means.push_back(points[index]);
     }
 
     for (uint32_t i = 1; i != k; ++i) {
@@ -89,8 +91,16 @@ std::vector<byte_vec> random_plusplus(std::vector<byte_vec> const& points, uint3
         //             distances.size(), 0.0, 0.0, [&distances, &i](double) { return distances[i++];
         //             });
         // #endif
-        means.push_back(points[generator(rand_engine)]);
+        uint64_t index = generator(rand_engine);
+        // std::cout << "choosing mean-" << i << " as point of index " << index << std::endl;
+        means.push_back(points[index]);
     }
+
+    // std::cout << "means are:\n";
+    // for (auto const& mean : means) {
+    //     for (auto x : mean) { std::cout << x << ' '; }
+    //     std::cout << std::endl;
+    // }
 
     return means;
 }
@@ -123,7 +133,7 @@ std::vector<uint32_t> calculate_clusters(std::vector<byte_vec> const& points,
     uint64_t count = 0;
     for (auto const& point : points) {
         uint32_t cluster_id = closest_mean(point, means);
-        std::cout << "point-" << count << " assigned to cluster " << cluster_id << std::endl;
+        // std::cout << "point-" << count << " assigned to cluster " << cluster_id << std::endl;
         clusters.push_back(cluster_id);
         ++count;
     }
@@ -141,6 +151,7 @@ std::vector<byte_vec> calculate_means(std::vector<byte_vec> const& points,
     const uint64_t point_size = points.front().size();
     std::vector<byte_vec> means(k, byte_vec(point_size, 0));
     std::vector<uint32_t> count(k, 0);
+
     for (uint64_t i = 0; i != clusters.size(); ++i) {
         assert(clusters[i] < k);
         count[clusters[i]] += 1;
@@ -149,8 +160,8 @@ std::vector<byte_vec> calculate_means(std::vector<byte_vec> const& points,
         auto const& point = points[i];
         for (uint64_t j = 0; j != point_size; ++j) {
             float_type val = std::round(
-                ((double(mean[j]) + double(point[j])) * (count_value > 1 ? count_value - 1 : 1))  //
-                / count_value);
+                (double(mean[j]) * (count_value > 1 ? count_value - 1 : 1) + double(point[j])) /
+                count_value);
             assert(val >= 0.0 and val <= 255.0);
             mean[j] = val;
         }
@@ -170,6 +181,26 @@ std::vector<byte_vec> calculate_means(std::vector<byte_vec> const& points,
     // 17 + 0 = 17 / 1 = 17
     // 17* 1 + 8 = 25 / 2 = 12
     // 12*2 + 34 = 19
+
+    // for (size_t i = 0; i < clusters.size(); ++i) {
+    //     auto& mean = means[clusters[i]];
+    //     count[clusters[i]] += 1;
+    //     for (size_t j = 0; j != point_size; ++j) { mean[j] += points[i][j]; }
+    // }
+    // for (size_t i = 0; i < k; ++i) {
+    //     std::cout << "count[" << i << "]=" << count[i] << std::endl;
+    //     if (count[i] == 0) {
+    //         means[i] = old_means[i];
+    //     } else {
+    //         for (size_t j = 0; j != point_size; ++j) { means[i][j] /= count[i]; }
+    //     }
+    // }
+
+    // std::cout << "means are:\n";
+    // for (auto const& mean : means) {
+    //     for (auto x : mean) { std::cout << x << ' '; }
+    //     std::cout << std::endl;
+    // }
 
     return means;
 }
@@ -291,6 +322,10 @@ std::vector<uint32_t> kmeans_lloyd(std::vector<byte_vec> const& points,
     uint64_t iteration = 0;
     do {
         clusters = details::calculate_clusters(points, means);
+        std::cout << "clusters: " << std::endl;
+        for (auto c : clusters) { std::cout << c << " "; }
+        std::cout << std::endl;
+
         // old_old_means = old_means;
         old_means = means;
         means = details::calculate_means(points, clusters, old_means, parameters.get_k());
