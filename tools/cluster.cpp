@@ -39,12 +39,12 @@ int main(int argc, char** argv) {
 
     {
         std::ifstream in(parser.get<std::string>("byte_vectors_filename"), std::ios::binary);
-        uint32_t num_bytes_per_point = 0;
-        uint32_t num_points = 0;
-        in.read(reinterpret_cast<char*>(&num_bytes_per_point), sizeof(uint32_t));
-        in.read(reinterpret_cast<char*>(&num_points), sizeof(uint32_t));
+        uint64_t num_bytes_per_point = 0;
+        uint64_t num_points = 0;
+        in.read(reinterpret_cast<char*>(&num_bytes_per_point), sizeof(uint64_t));
+        in.read(reinterpret_cast<char*>(&num_points), sizeof(uint64_t));
         points.resize(num_points, point(num_bytes_per_point));
-        for (uint32_t i = 0; i != num_points; ++i) {
+        for (uint64_t i = 0; i != num_points; ++i) {
             in.read(reinterpret_cast<char*>(points[i].data()), num_bytes_per_point);
         }
         in.close();
