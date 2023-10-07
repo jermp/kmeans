@@ -4,6 +4,8 @@
 #include <cassert>
 #include <random>
 #include <vector>
+#include <queue>
+#include <limits>
 
 namespace kmeans {
 
@@ -174,14 +176,20 @@ bool deltas_below_limit(std::vector<float_type> const& deltas, float_type min_de
 }  // namespace details
 
 struct clustering_parameters {
-    clustering_parameters(uint32_t k)
-        : m_k(k)
+    clustering_parameters()
+        : m_has_k(false)
+        , m_k()
         , m_has_max_iter(false)
         , m_max_iter()
         , m_has_min_delta(false)
         , m_min_delta()
         , m_has_rand_seed(false)
         , m_rand_seed() {}
+
+    void set_k(uint64_t k) {
+        m_k = k;
+        m_has_k = true;
+    }
 
     void set_max_iteration(uint64_t max_iter) {
         m_max_iter = max_iter;
@@ -198,6 +206,7 @@ struct clustering_parameters {
         m_has_rand_seed = true;
     }
 
+    bool has_k() const { return m_has_k; }
     bool has_max_iteration() const { return m_has_max_iter; }
     bool has_min_delta() const { return m_has_min_delta; }
     bool has_random_seed() const { return m_has_rand_seed; }
@@ -208,6 +217,7 @@ struct clustering_parameters {
     uint64_t get_random_seed() const { return m_rand_seed; }
 
 private:
+    bool m_has_k;
     uint32_t m_k;
     bool m_has_max_iter;
     uint64_t m_max_iter;
@@ -217,33 +227,115 @@ private:
     uint64_t m_rand_seed;
 };
 
-std::vector<uint32_t> kmeans_lloyd(std::vector<point> const& points,
-                                   clustering_parameters const& parameters) {
+struct cluster_data {
+    cluster_data() : iterations(0) {}
+    uint64_t iterations;
+    std::vector<float_type> deltas;
+    std::vector<uint32_t> clusters;
+};
+
+cluster_data kmeans_lloyd(std::vector<point> const& points,
+                          clustering_parameters const& parameters) {
     assert(parameters.get_k() > 0);
     assert(points.size() >= parameters.get_k());
 
+    cluster_data data;
     std::random_device rand_device;
     uint64_t seed = parameters.has_random_seed() ? parameters.get_random_seed() : rand_device();
 
     std::vector<mean> old_means;
     std::vector<mean> means = details::random_plusplus(points, parameters.get_k(), seed);
-    std::vector<uint32_t> clusters;
 
     /* calculate new means until convergence is reached or we hit the maximum iteration count */
-    uint64_t iteration = 0;
     do {
-        clusters = details::calculate_clusters(points, means);
+        data.clusters = details::calculate_clusters(points, means);
         old_means = std::move(means);
-        means = details::calculate_means(points, clusters, old_means, parameters.get_k());
-        ++iteration;
-    } while (!(parameters.has_max_iteration() and iteration == parameters.get_max_iteration()) and
-             !(parameters.has_min_delta() and
-               details::deltas_below_limit(details::deltas(old_means, means),
-                                           parameters.get_min_delta())));
+        means = details::calculate_means(points, data.clusters, old_means, parameters.get_k());
+        data.iterations += 1;
+        if (parameters.has_min_delta()) data.deltas = details::deltas(old_means, means);
+    } while (
+        !(parameters.has_max_iteration() and data.iterations == parameters.get_max_iteration()) and
+        !(parameters.has_min_delta() and
+          details::deltas_below_limit(data.deltas, parameters.get_min_delta())));
 
-    std::cerr << "terminated after " << iteration << " iterations" << std::endl;
+    return data;
+}
 
-    return clusters;
+cluster_data kmeans_divisive(std::vector<point> const& points,
+                             clustering_parameters const& parameters) {
+    assert(points.size() > 0);
+    cluster_data data;
+
+    struct cluster {
+        cluster(uint64_t size, float_type d) {
+            indexes.reserve(size);
+            delta = d;
+        }
+        cluster(float_type d) { delta = d; }
+        std::vector<uint64_t> indexes;
+        uint64_t id;
+        float_type delta;
+    };
+
+    std::queue<cluster> Q;
+
+    {
+        cluster c(points.size(), std::numeric_limits<float_type>::infinity());
+        for (uint64_t i = 0; i != points.size(); ++i) c.indexes.push_back(i);
+        Q.push(c);
+    }
+
+    uint64_t id = 0;
+    std::vector<cluster> final_clusters;
+
+    uint64_t min_cluster_size = (points.size() * 0.01) / 100;  // 0.01%
+    std::cout << " == min_cluster_size = " << min_cluster_size << std::endl;
+
+    while (!Q.empty()) {
+        auto& c = Q.front();
+        if (c.delta < parameters.get_min_delta() or c.indexes.size() <= min_cluster_size) {
+            /* finalize cluster */
+            cluster final(c.delta);
+            final.id = id;
+            id += 1;
+            final.indexes.swap(c.indexes);
+            final_clusters.push_back(std::move(final));
+        } else {
+            std::vector<point> tmp_points;
+            tmp_points.reserve(c.indexes.size());
+            for (auto index : c.indexes) tmp_points.push_back(points[index]);
+            clustering_parameters tmp_params = parameters;
+            tmp_params.set_k(2);
+            auto data = kmeans_lloyd(tmp_points, tmp_params);
+            cluster c1(data.clusters.size(), data.deltas[0]);
+            cluster c2(data.clusters.size(), data.deltas[1]);
+            for (uint64_t i = 0; i != data.clusters.size(); ++i) {
+                assert(data.clusters[i] <= 1);
+                if (data.clusters[i] == 0) {
+                    c1.indexes.push_back(i);
+                } else {
+                    c2.indexes.push_back(i);
+                }
+            }
+            Q.push(c1);
+            Q.push(c2);
+        }
+        Q.pop();
+        data.iterations += 1;
+    }
+
+    assert(final_clusters.size() == id);
+
+    std::cerr << " == number of clusters = " << id << std::endl;
+
+    data.deltas.reserve(final_clusters.size());
+    data.clusters.resize(points.size());
+    for (auto const& fc : final_clusters) {
+        data.deltas.push_back(fc.delta);
+        for (auto index : fc.indexes) data.clusters[index] = fc.id;
+    }
+
+    return data;
 }
 
 }  // namespace kmeans

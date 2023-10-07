@@ -10,7 +10,7 @@ int main(int argc, char** argv) {
     cmd_line_parser::parser parser(argc, argv);
     parser.add("byte_vectors_filename",
                "The filename of the file with the byte vectors to cluster.", "-i", true);
-    parser.add("k", "Number of wanted clusters.", "-k", true);
+    parser.add("k", "Number of wanted clusters.", "-k", false);
     parser.add("max_iter", "Number of maximum iterations.", "-m", false);
     parser.add("min_delta", "Minimum difference in means.", "-d", false);
     parser.add("seed", "Random seed for kmeans++ initialization.", "-s", false);
@@ -20,13 +20,20 @@ int main(int argc, char** argv) {
 
     if (!parser.parse()) return 1;
 
-    auto k = parser.get<uint64_t>("k");
-    if (k > (uint64_t(1) << 32)) {
-        std::cerr << "Error: number of clusters cannot be more than 2^32." << std::endl;
-        return 1;
-    }
+    clustering_parameters params;
 
-    clustering_parameters params(k);
+    if (parser.parsed("k")) {
+        uint64_t k = parser.get<uint64_t>("k");
+        if (k == 0) {
+            std::cerr << "Error: k cannot be 0" << std::endl;
+            return 1;
+        }
+        if (k > (uint64_t(1) << 32)) {
+            std::cerr << "Error: number of clusters cannot be more than 2^32." << std::endl;
+            return 1;
+        }
+        params.set_k(k);
+    }
     if (parser.parsed("max_iter")) params.set_max_iteration(parser.get<uint64_t>("max_iter"));
     if (parser.parsed("min_delta")) {
         float_type d = parser.get<float_type>("min_delta");
@@ -63,10 +70,11 @@ int main(int argc, char** argv) {
         for (uint64_t i = 0; i != batch_size; ++i) {
             in.read(reinterpret_cast<char*>(points[i].data()), num_bytes_per_point);
         }
-        std::cerr << "batch-" << batch << ": running kmeans with k = " << k << " for "
-                  << points.size() << " points" << std::endl;
-        auto labels = kmeans_lloyd(points, params);
-        for (auto l : labels) std::cout << l << " ";
+        std::cerr << "batch-" << batch << ": running kmeans for " << points.size() << " points"
+                  << std::endl;
+        auto data = params.has_k() ? kmeans_lloyd(points, params) : kmeans_divisive(points, params);
+        std::cerr << " == terminated after " << data.iterations << " iterations" << std::endl;
+        for (auto c : data.clusters) std::cout << c << " ";
         num_points -= batch_size;
     }
 
