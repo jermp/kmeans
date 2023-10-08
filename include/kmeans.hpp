@@ -348,6 +348,14 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
 
     std::cerr << " == number of clusters = " << id << std::endl;
 
+    /* sort by non-increasing cluster size */
+    std::sort(final_clusters.begin(), final_clusters.end(),
+              [](auto const& c0, auto const& c1) { return c0.indexes.size() > c1.indexes.size(); });
+
+    for (auto const& fc : final_clusters) {
+        std::cerr << "cluster-" << fc.id << ": " << fc.indexes.size() << std::endl;
+    }
+
     data.clusters.resize(points.size());
     for (auto const& fc : final_clusters) {
         for (auto index : fc.indexes) data.clusters[index] = fc.id;
