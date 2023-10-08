@@ -184,7 +184,11 @@ struct clustering_parameters {
         , m_has_min_delta(false)
         , m_min_delta()
         , m_has_rand_seed(false)
-        , m_rand_seed() {}
+        , m_rand_seed()
+        , m_has_min_mse(false)
+        , m_min_mse()
+        , m_has_min_cluster_size(false)
+        , m_min_cluster_size() {}
 
     void set_k(uint64_t k) {
         m_k = k;
@@ -206,6 +210,16 @@ struct clustering_parameters {
         m_has_rand_seed = true;
     }
 
+    void set_min_mse(double min_mse) {
+        m_min_mse = min_mse;
+        m_has_min_mse = true;
+    }
+
+    void set_min_cluster_size(uint64_t min_cluster_size) {
+        m_min_cluster_size = min_cluster_size;
+        m_has_min_cluster_size = true;
+    }
+
     bool has_k() const { return m_has_k; }
     bool has_max_iteration() const { return m_has_max_iter; }
     bool has_min_delta() const { return m_has_min_delta; }
@@ -215,6 +229,8 @@ struct clustering_parameters {
     uint64_t get_max_iteration() const { return m_max_iter; }
     float_type get_min_delta() const { return m_min_delta; }
     uint64_t get_random_seed() const { return m_rand_seed; }
+    double get_min_mse() const { return m_min_mse; }
+    uint64_t get_min_cluster_size() const { return m_min_cluster_size; }
 
 private:
     bool m_has_k;
@@ -225,6 +241,10 @@ private:
     float_type m_min_delta;
     bool m_has_rand_seed;
     uint64_t m_rand_seed;
+    bool m_has_min_mse;
+    double m_min_mse;
+    bool m_has_min_cluster_size;
+    uint64_t m_min_cluster_size;
 };
 
 struct cluster_data {
@@ -263,15 +283,23 @@ cluster_data kmeans_lloyd(std::vector<point> const& points,
 
 cluster_data kmeans_divisive(std::vector<point> const& points,
                              clustering_parameters const& parameters) {
+    typedef uint32_t index_type;
+
     assert(points.size() > 0);
+    if (sizeof(index_type) * 8 < 64 and points.size() > (1ULL << sizeof(index_type) * 8)) {
+        throw std::runtime_error("number of points does not fit in a " +
+                                 std::to_string(sizeof(index_type)) + "-byte integer");
+    }
+
     cluster_data data;
 
     struct cluster {
         cluster() {}
         cluster(uint64_t size) { indexes.reserve(size); }
-        std::vector<uint64_t> indexes;
+        std::vector<index_type> indexes;
         mean centroid;
         uint64_t id;
+        double mse;  // mean squared error
     };
 
     std::queue<cluster> Q;
@@ -285,16 +313,11 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
     uint64_t id = 0;
     std::vector<cluster> final_clusters;
 
-    uint64_t min_cluster_size = std::max<uint64_t>(1, (points.size() * 0.01) / 100 /* 0.01% */);
-    double eps = 126.5 * 126.5 * points.front().size() * 0.00001;
-
-    std::cerr << " == min_cluster_size = " << min_cluster_size << std::endl;
-    std::cerr << " == eps = " << eps << std::endl;
+    std::cerr << " == min_cluster_size = " << parameters.get_min_cluster_size() << std::endl;
+    std::cerr << " == min_mse = " << parameters.get_min_mse() << std::endl;
 
     while (!Q.empty()) {
         auto& c = Q.front();
-
-        std::cerr << "\n == cluster with " << c.indexes.size() << " points" << std::endl;
 
         /* compute mean squared error for the cluster c */
         double mse = std::numeric_limits<double>::infinity();
@@ -306,17 +329,14 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
             mse /= c.indexes.size();
         }
 
-        std::cerr << " == mse " << mse << " / " << eps << std::endl;
-
-        if (mse < eps or c.indexes.size() <= min_cluster_size) {
+        if (mse < parameters.get_min_mse() or
+            c.indexes.size() <= parameters.get_min_cluster_size()) {
             /* finalize cluster */
             cluster final;
             final.id = id;
             id += 1;
             final.indexes.swap(c.indexes);
-
-            std::cerr << " == FINALIZED!" << std::endl;
-
+            final.mse = mse;
             final_clusters.push_back(std::move(final));
         } else {
             std::vector<point> tmp_points;
@@ -346,14 +366,16 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
 
     assert(final_clusters.size() == id);
 
-    std::cerr << " == number of clusters = " << id << std::endl;
+    std::cerr << "\n == number of clusters = " << id << std::endl;
 
     /* sort by non-increasing cluster size */
     std::sort(final_clusters.begin(), final_clusters.end(),
               [](auto const& c0, auto const& c1) { return c0.indexes.size() > c1.indexes.size(); });
 
     for (auto const& fc : final_clusters) {
-        std::cerr << "cluster-" << fc.id << ": " << fc.indexes.size() << std::endl;
+        std::cerr << "cluster-" << fc.id << ": size = " << fc.indexes.size() << " ("
+                  << (fc.indexes.size() * 100.0) / points.size() << "%); mse = " << fc.mse
+                  << std::endl;
     }
 
     data.clusters.resize(points.size());

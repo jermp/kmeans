@@ -10,13 +10,16 @@ int main(int argc, char** argv) {
     cmd_line_parser::parser parser(argc, argv);
     parser.add("byte_vectors_filename",
                "The filename of the file with the byte vectors to cluster.", "-i", true);
-    parser.add("k", "Number of wanted clusters.", "-k", false);
-    parser.add("max_iter", "Number of maximum iterations.", "-m", false);
-    parser.add("min_delta", "Minimum difference in means.", "-d", false);
-    parser.add("seed", "Random seed for kmeans++ initialization.", "-s", false);
+    parser.add("k", "Number of wanted clusters (for kmeans_lloyd).", "-k", false);
+    parser.add("max_iter", "Number of maximum iterations (for kmeans_lloyd).", "-m", false);
+    parser.add("min_delta", "Minimum difference in means (for kmeans_lloyd).", "-d", false);
+    parser.add("seed", "Random seed for kmeans++ initialization (for kmeans_lloyd).", "-s", false);
     parser.add("batch_size",
                "Use batch mode: compute k clusters for batches of batch_size vectors.", "-b",
                false);
+    parser.add("min_mse", "Minimum mean squared error (mse) (for kmeans_divisive).", "--mse",
+               false);
+    parser.add("min_cluster_size", "Minimum cluster size (for kmeans_divisive).", "--mcs", false);
 
     if (!parser.parse()) return 1;
 
@@ -44,6 +47,24 @@ int main(int argc, char** argv) {
         params.set_min_delta(d);
     }
     if (parser.parsed("seed")) params.set_random_seed(parser.get<uint64_t>("seed"));
+
+    if (parser.parsed("min_mse")) {
+        double mse = parser.get<double>("min_mse");
+        if (mse < 0) {
+            std::cerr << "Error: mse cannot be < 0" << std::endl;
+            return 1;
+        }
+        params.set_min_mse(mse);
+    }
+
+    if (parser.parsed("min_cluster_size")) {
+        uint64_t min_cluster_size = parser.get<uint64_t>("min_cluster_size");
+        if (min_cluster_size == 0) {
+            std::cerr << "Error: min_cluster_size cannot be 0" << std::endl;
+            return 1;
+        }
+        params.set_min_cluster_size(min_cluster_size);
+    }
 
     uint64_t batch_size = 0;
     if (parser.parsed("batch_size")) {
