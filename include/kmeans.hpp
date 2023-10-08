@@ -298,8 +298,8 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
         cluster(uint64_t size) { indexes.reserve(size); }
         std::vector<index_type> indexes;
         mean centroid;
-        uint64_t id;
-        double mse;  // mean squared error
+        uint64_t id = -1;
+        double mse = std::numeric_limits<double>::infinity();  // mean squared error
     };
 
     std::queue<cluster> Q;
