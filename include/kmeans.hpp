@@ -307,6 +307,18 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
     {
         cluster c(points.size());
         for (uint64_t i = 0; i != points.size(); ++i) c.indexes.push_back(i);
+
+        /* calculate centroid as mean of all points */
+        std::vector<uint64_t> sum(points.front().size(), 0);  // to avoid overflow
+        for (auto index : c.indexes) {
+            auto const& point = points[index];
+            for (uint64_t i = 0; i != point.size(); ++i) sum[i] += point[i];
+        }
+        c.centroid.resize(points.front().size(), 0.0);
+        for (uint64_t i = 0; i != c.centroid.size(); ++i) {
+            c.centroid[i] = static_cast<double>(sum[i]) / c.indexes.size();
+        }
+
         Q.push(c);
     }
 
@@ -320,14 +332,11 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
         auto& c = Q.front();
 
         /* compute mean squared error for the cluster c */
-        double mse = std::numeric_limits<double>::infinity();
-        if (!c.centroid.empty()) {
-            mse = 0.0;
-            for (auto index : c.indexes) {
-                mse += details::distance_squared(points[index], c.centroid);
-            }
-            mse /= c.indexes.size();
+        double mse = 0.0;
+        for (auto index : c.indexes) {
+            mse += details::distance_squared(points[index], c.centroid);
         }
+        mse /= c.indexes.size();
 
         if (mse < parameters.get_min_mse() or
             c.indexes.size() <= parameters.get_min_cluster_size()) {
