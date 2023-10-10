@@ -97,7 +97,7 @@ std::vector<mean> random_plusplus(std::vector<point> const& points, uint32_t k, 
 /*
     Calculate the index of the mean a particular data point is closest to (euclidean distance)
 */
-uint64_t closest_mean(point const& point, std::vector<mean> const& means) {
+std::pair<uint64_t, float_type> closest_mean(point const& point, std::vector<mean> const& means) {
     assert(!means.empty());
     float_type closest = distance_squared(point, means.front());
     uint64_t index = 0;
@@ -108,7 +108,7 @@ uint64_t closest_mean(point const& point, std::vector<mean> const& means) {
             index = i;
         }
     }
-    return index;
+    return {index, closest};
 }
 
 /*
@@ -121,7 +121,7 @@ std::vector<uint32_t> calculate_clusters(std::vector<point> const& points,
     clusters.resize(points.size());
 #pragma omp parallel for
     for (uint64_t i = 0; i != points.size(); ++i) {
-        uint32_t cluster_id = closest_mean(points[i], means);
+        uint32_t cluster_id = closest_mean(points[i], means).first;
         clusters[i] = cluster_id;
     }
     return clusters;
@@ -250,6 +250,7 @@ private:
 struct cluster_data {
     cluster_data() : iterations(0) {}
     uint64_t iterations;
+    uint64_t num_clusters;
     std::vector<mean> means;
     std::vector<uint32_t> clusters;
 };
@@ -260,6 +261,7 @@ cluster_data kmeans_lloyd(std::vector<point> const& points,
     assert(points.size() >= parameters.get_k());
 
     cluster_data data;
+    data.num_clusters = parameters.get_k();
     std::random_device rand_device;
     uint64_t seed = parameters.has_random_seed() ? parameters.get_random_seed() : rand_device();
 
@@ -281,8 +283,7 @@ cluster_data kmeans_lloyd(std::vector<point> const& points,
     return data;
 }
 
-cluster_data kmeans_divisive(std::vector<point> const& points,
-                             clustering_parameters const& parameters) {
+cluster_data kmeans_divisive(std::vector<point> const& points, clustering_parameters& parameters) {
     typedef uint32_t index_type;
 
     assert(points.size() > 0);
@@ -323,10 +324,10 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
     }
 
     uint64_t id = 0;
+    bool first = true;  // first iteration
     std::vector<cluster> final_clusters;
 
     std::cerr << " == min_cluster_size = " << parameters.get_min_cluster_size() << std::endl;
-    std::cerr << " == min_mse = " << parameters.get_min_mse() << std::endl;
 
     while (!Q.empty()) {
         auto& c = Q.front();
@@ -338,6 +339,12 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
         }
         mse /= c.indexes.size();
 
+        if (first) {
+            parameters.set_min_mse(mse * 0.1);
+            std::cerr << " == min_mse = " << parameters.get_min_mse() << std::endl;
+            first = false;
+        }
+
         if (mse < parameters.get_min_mse() or
             c.indexes.size() <= parameters.get_min_cluster_size()) {
             /* finalize cluster */
@@ -345,6 +352,7 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
             final.id = id;
             id += 1;
             final.indexes.swap(c.indexes);
+            final.centroid.swap(c.centroid);
             final.mse = mse;
             final_clusters.push_back(std::move(final));
         } else {
@@ -375,22 +383,62 @@ cluster_data kmeans_divisive(std::vector<point> const& points,
 
     assert(final_clusters.size() == id);
 
-    std::cerr << "\n == number of clusters = " << id << std::endl;
+    std::vector<cluster> final;
+    final.reserve(final_clusters.size());
+
+    /* take the final clusters */
+    for (auto& fc : final_clusters) {
+        if (fc.mse <= parameters.get_min_mse() and
+            fc.indexes.size() >= parameters.get_min_cluster_size()) {
+            final.push_back(std::move(fc));
+            fc.mse = -1.0;
+        }
+    }
+
+    /* re-assign the other points */
+    std::vector<mean> means(final.size());
+    for (uint64_t i = 0; i != final.size(); ++i) means[i] = std::move(final[i].centroid);
+    for (auto const& fc : final_clusters) {
+        if (fc.mse == -1.0) {  // cluster was moved, hence it was final
+            continue;
+        }
+        if (fc.mse > parameters.get_min_mse() or
+            fc.indexes.size() < parameters.get_min_cluster_size()) {
+            /* re-assign to best cluster */
+            for (uint64_t i = 0; i != fc.indexes.size(); ++i) {
+                assert(points[fc.indexes[i]].size());
+                auto [cluster_id, closest_distance] =
+                    details::closest_mean(points[fc.indexes[i]], means);
+                assert(cluster_id < final.size());
+                final[cluster_id].indexes.push_back(fc.indexes[i]);
+            }
+        }
+    }
 
     /* sort by non-increasing cluster size */
-    std::sort(final_clusters.begin(), final_clusters.end(), [](auto const& c0, auto const& c1) {
+    std::sort(final.begin(), final.end(), [](auto const& c0, auto const& c1) {
         if (c0.indexes.size() == c1.indexes.size()) return c0.mse < c1.mse;
         return c0.indexes.size() > c1.indexes.size();
     });
 
-    for (auto const& fc : final_clusters) {
-        std::cerr << "cluster-" << fc.id << ": size = " << fc.indexes.size() << " ("
-                  << (fc.indexes.size() * 100.0) / points.size() << "%); mse = " << fc.mse
-                  << std::endl;
+    /* re-assign ids */
+    for (uint32_t cluster_id = 0; cluster_id != final.size(); ++cluster_id) {
+        final[cluster_id].id = cluster_id;
     }
 
+    // uint64_t sum = 0;
+    // for (auto const& fc : final) {
+    //     sum += fc.indexes.size();
+    //     std::cerr << "cluster-" << fc.id << ": size = " << fc.indexes.size() << " ("
+    //               << (fc.indexes.size() * 100.0) / points.size() << "%); mse = " << fc.mse
+    //               << std::endl;
+    // }
+    // assert(sum == points.size());
+    // std::cout << sum << " / " << points.size() << std::endl;
+
+    data.num_clusters = final.size();
     data.clusters.resize(points.size());
-    for (auto const& fc : final_clusters) {
+    for (auto const& fc : final) {
         for (auto index : fc.indexes) data.clusters[index] = fc.id;
     }
 
