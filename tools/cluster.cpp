@@ -78,6 +78,8 @@ int main(int argc, char** argv) {
     std::vector<point> points;
 
     std::ifstream in(parser.get<std::string>("byte_vectors_filename"), std::ios::binary);
+    if (!in.is_open()) throw std::runtime_error("error in opening input file");
+
     uint64_t num_bytes_per_point = 0;
     uint64_t num_points = 0;
     in.read(reinterpret_cast<char*>(&num_bytes_per_point), sizeof(uint64_t));
