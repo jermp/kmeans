@@ -95,7 +95,8 @@ int main(int argc, char** argv) {
         }
         std::cerr << "batch-" << batch << ": running kmeans for " << points.size() << " points"
                   << std::endl;
-        auto data = params.has_k() ? kmeans_lloyd(points, params) : kmeans_divisive(points, params);
+        auto data = params.has_k() ? kmeans_lloyd(points.begin(), points.end(), params)
+                                   : kmeans_divisive(points.begin(), points.end(), params);
         std::cerr << " == terminated after " << data.iterations << " iterations" << std::endl;
         for (auto c : data.clusters) std::cout << c << " ";
         num_points -= batch_size;
