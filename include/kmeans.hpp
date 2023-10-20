@@ -37,6 +37,7 @@ float_type distance(mean const& x, mean const& y) { return std::sqrt(distance_sq
 template <typename RandomAccessIterator>
 std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomAccessIterator begin,
                                          RandomAccessIterator end) {
+    assert(end > begin);
     const uint64_t num_points = end - begin;
     std::vector<float_type> distances;
     distances.resize(num_points);
@@ -60,6 +61,7 @@ std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomA
 template <typename RandomAccessIterator>
 std::vector<mean> random_plusplus(RandomAccessIterator begin, RandomAccessIterator end, uint32_t k,
                                   uint64_t seed) {
+    assert(end > begin);
     const uint64_t num_points = end - begin;
     assert(k > 0);
     assert(num_points > 0);
@@ -124,6 +126,7 @@ std::pair<uint64_t, float_type> closest_mean(point const& point, std::vector<mea
 template <typename RandomAccessIterator>
 std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAccessIterator end,
                                          std::vector<mean> const& means) {
+    assert(end > begin);
     const uint64_t num_points = end - begin;
     std::vector<uint32_t> clusters;
     clusters.resize(num_points);
@@ -140,10 +143,12 @@ std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAcces
     Calculate means based on data points and their cluster assignments.
 */
 template <typename RandomAccessIterator>
-std::vector<mean> calculate_means(RandomAccessIterator begin, RandomAccessIterator /* end */,
+std::vector<mean> calculate_means(RandomAccessIterator begin, RandomAccessIterator end,
                                   std::vector<uint32_t> const& clusters,
                                   std::vector<mean> const& old_means, uint32_t k) {
-    assert(clusters.size() == end - begin);
+    assert(end > begin);
+    assert(clusters.size() == static_cast<uint64_t>(end - begin));
+    (void)end;  // silence, please!
 
     const uint64_t point_size = (*begin).size();
     std::vector<mean> means(k, mean(point_size, 0.0));
@@ -269,6 +274,7 @@ struct cluster_data {
 template <typename RandomAccessIterator>
 cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
                           clustering_parameters const& parameters) {
+    assert(end > begin);
     assert(parameters.get_k() > 0);
     assert(end - begin >= parameters.get_k());
 
@@ -299,6 +305,7 @@ cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
 template <typename RandomAccessIterator>
 cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator end,
                              clustering_parameters& parameters) {
+    assert(end > begin);
     typedef uint32_t index_type;
     const uint64_t num_points = end - begin;
     assert(num_points > 0);
