@@ -140,11 +140,10 @@ std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAcces
     Calculate means based on data points and their cluster assignments.
 */
 template <typename RandomAccessIterator>
-std::vector<mean> calculate_means(RandomAccessIterator begin, RandomAccessIterator end,
+std::vector<mean> calculate_means(RandomAccessIterator begin, RandomAccessIterator /* end */,
                                   std::vector<uint32_t> const& clusters,
                                   std::vector<mean> const& old_means, uint32_t k) {
-    const uint64_t num_points = end - begin;
-    assert(clusters.size() == num_points);
+    assert(clusters.size() == end - begin);
 
     const uint64_t point_size = (*begin).size();
     std::vector<mean> means(k, mean(point_size, 0.0));
@@ -270,9 +269,8 @@ struct cluster_data {
 template <typename RandomAccessIterator>
 cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
                           clustering_parameters const& parameters) {
-    const uint64_t num_points = end - begin;
     assert(parameters.get_k() > 0);
-    assert(num_points >= parameters.get_k());
+    assert(end - begin >= parameters.get_k());
 
     cluster_data data;
     data.num_clusters = parameters.get_k();
