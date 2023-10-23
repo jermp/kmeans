@@ -420,25 +420,29 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
         }
     }
 
-    /* re-assign the other points */
-    std::vector<mean> means(final_clusters.size());
-    for (uint64_t i = 0; i != final_clusters.size(); ++i) {
-        means[i] = std::move(final_clusters[i].centroid);
-    }
-    for (auto const& fc : atomic_clusters) {
-        if (fc.mse == -1.0) {  // cluster was moved, hence it was final
-            continue;
+    if (final_clusters.size() > 0) {
+        /* re-assign the other points */
+        std::vector<mean> means(final_clusters.size());
+        for (uint64_t i = 0; i != final_clusters.size(); ++i) {
+            means[i] = std::move(final_clusters[i].centroid);
         }
-        if (fc.mse > parameters.get_min_mse() or
-            fc.indexes.size() < parameters.get_min_cluster_size()) {
-            /* re-assign to best cluster */
-            for (uint64_t i = 0; i != fc.indexes.size(); ++i) {
-                auto [cluster_id, closest_distance] =
-                    details::closest_mean(*(begin + fc.indexes[i]), means);
-                assert(cluster_id < final_clusters.size());
-                final_clusters[cluster_id].indexes.push_back(fc.indexes[i]);
+        for (auto const& fc : atomic_clusters) {
+            if (fc.mse == -1.0) {  // cluster was moved, hence it was final
+                continue;
+            }
+            if (fc.mse > parameters.get_min_mse() or
+                fc.indexes.size() < parameters.get_min_cluster_size()) {
+                /* re-assign to best cluster */
+                for (uint64_t i = 0; i != fc.indexes.size(); ++i) {
+                    auto [cluster_id, closest_distance] =
+                        details::closest_mean(*(begin + fc.indexes[i]), means);
+                    assert(cluster_id < final_clusters.size());
+                    final_clusters[cluster_id].indexes.push_back(fc.indexes[i]);
+                }
             }
         }
+    } else {
+        final_clusters.swap(atomic_clusters);
     }
 
     /* sort by non-increasing cluster size */
