@@ -15,6 +15,8 @@ typedef std::vector<float_type> mean;
 
 namespace details {
 
+struct indexed_iterator {};
+
 /*
     Calculate the square of the distance between two points.
 */
@@ -194,17 +196,17 @@ bool deltas_below_limit(std::vector<float_type> const& deltas, float_type min_de
 struct clustering_parameters {
     clustering_parameters()
         : m_has_k(false)
-        , m_k()
+        , m_k(0)
         , m_has_max_iter(false)
-        , m_max_iter()
+        , m_max_iter(0)
         , m_has_min_delta(false)
-        , m_min_delta()
+        , m_min_delta(0)
         , m_has_rand_seed(false)
-        , m_rand_seed()
+        , m_rand_seed(0)
         , m_has_min_mse(false)
-        , m_min_mse()
+        , m_min_mse(0)
         , m_has_min_cluster_size(false)
-        , m_min_cluster_size() {}
+        , m_min_cluster_size(0) {}
 
     void set_k(uint64_t k) {
         m_k = k;
@@ -317,6 +319,12 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
 
     cluster_data data;
 
+    if (num_points == 1) {
+        data.num_clusters = 1;
+        data.clusters.push_back(0);
+        return data;
+    }
+
     struct cluster {
         cluster() {}
         cluster(uint64_t size) { indexes.reserve(size); }
@@ -324,6 +332,35 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
         mean centroid;
         uint64_t id = -1;
         double mse = std::numeric_limits<double>::infinity();  // mean squared error
+    };
+
+    struct iterator_adaptor {
+        iterator_adaptor(const uint64_t i, RandomAccessIterator begin,
+                         std::vector<index_type> const& indexes)
+            : m_i(i), m_begin(begin), m_indexes(indexes) {
+            assert(i <= indexes.size());
+        }
+
+        point const& operator*() const {
+            assert(m_i < m_indexes.size());
+            return *(m_begin + m_indexes[m_i]);
+        }
+
+        iterator_adaptor operator+(const uint64_t i) const {
+            return iterator_adaptor(i, m_begin, m_indexes);
+        }
+
+        uint64_t operator-(iterator_adaptor const& other) {
+            assert(m_i >= other.m_i);
+            return m_i - other.m_i;
+        }
+
+        bool operator>(iterator_adaptor const& other) const { return m_i > other.m_i; }
+
+    private:
+        uint64_t m_i;
+        RandomAccessIterator m_begin;
+        std::vector<index_type> const& m_indexes;
     };
 
     std::queue<cluster> Q;
@@ -355,6 +392,7 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
 
     while (!Q.empty()) {
         auto& c = Q.front();
+        const uint64_t num_points_in_cluster = c.indexes.size();
 
         /* compute mean squared error for the cluster c */
         double mse = 0.0;
@@ -362,7 +400,7 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
             auto const& point = *(begin + index);
             mse += details::distance_squared(point, c.centroid);
         }
-        mse /= c.indexes.size();
+        mse /= num_points_in_cluster;
 
         if (first) {
             parameters.set_min_mse(mse * 0.1);
@@ -371,7 +409,7 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
         }
 
         if (mse < parameters.get_min_mse() or
-            c.indexes.size() <= parameters.get_min_cluster_size()) {
+            num_points_in_cluster <= parameters.get_min_cluster_size()) {
             /* finalize cluster */
             cluster ac;
             ac.id = id;
@@ -381,12 +419,11 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
             ac.mse = mse;
             atomic_clusters.push_back(std::move(ac));
         } else {
-            std::vector<point> tmp_points;
-            tmp_points.reserve(c.indexes.size());
-            for (auto index : c.indexes) tmp_points.push_back(*(begin + index));
-            clustering_parameters tmp_params = parameters;
-            tmp_params.set_k(2);
-            auto data = kmeans_lloyd(tmp_points.begin(), tmp_points.end(), tmp_params);
+            clustering_parameters kmeans_lloyd_params = parameters;
+            kmeans_lloyd_params.set_k(2);
+            auto data = kmeans_lloyd(iterator_adaptor(0, begin, c.indexes),
+                                     iterator_adaptor(num_points_in_cluster, begin, c.indexes),
+                                     kmeans_lloyd_params);
             cluster c0(data.clusters.size());
             cluster c1(data.clusters.size());
             c0.centroid.swap(data.means[0]);

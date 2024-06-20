@@ -99,6 +99,7 @@ int main(int argc, char** argv) {
                                    : kmeans_divisive(points.begin(), points.end(), params);
         std::cerr << " == terminated after " << data.iterations << " iterations" << std::endl;
         for (auto c : data.clusters) std::cout << c << " ";
+        std::cout << std::endl;
         num_points -= batch_size;
     }
 
