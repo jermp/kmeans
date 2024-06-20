@@ -15,8 +15,6 @@ typedef std::vector<float_type> mean;
 
 namespace details {
 
-struct indexed_iterator {};
-
 /*
     Calculate the square of the distance between two points.
 */
