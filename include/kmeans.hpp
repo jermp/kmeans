@@ -6,6 +6,7 @@
 #include <vector>
 #include <queue>
 #include <limits>
+#include <thread>
 
 namespace kmeans {
 
@@ -36,21 +37,38 @@ float_type distance(mean const& x, mean const& y) { return std::sqrt(distance_sq
 */
 template <typename RandomAccessIterator>
 std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomAccessIterator begin,
-                                         RandomAccessIterator end) {
+                                         RandomAccessIterator end, const uint64_t num_threads) {
     assert(end > begin);
     const uint64_t num_points = end - begin;
     std::vector<float_type> distances;
     distances.resize(num_points);
-#pragma omp parallel for
-    for (uint64_t i = 0; i != num_points; ++i) {
-        auto const& point = *(begin + i);
-        float_type closest = distance_squared(point, means.front());
-        for (auto const& mean : means) {
-            float_type distance = distance_squared(point, mean);
-            if (distance < closest) closest = distance;
+
+    auto worker = [&](uint64_t start, uint64_t end) {
+        for (uint64_t i = start; i != end; ++i) {
+            auto const& point = *(begin + i);
+            float_type closest = distance_squared(point, means.front());
+            for (auto const& mean : means) {
+                float_type distance = distance_squared(point, mean);
+                if (distance < closest) closest = distance;
+            }
+            distances[i] = closest;
         }
-        distances[i] = closest;
+    };
+
+    const uint64_t block_size = (num_points + num_threads - 1) / num_threads;
+    std::vector<std::thread> threads;
+    for (uint64_t t = 0; t != num_threads; ++t) {
+        uint64_t start = t * block_size;
+        uint64_t end = std::min(start + block_size, num_points);
+        if (start < end) {  // avoid empty range
+            threads.emplace_back(worker, start, end);
+        }
     }
+
+    for (uint64_t i = 0; i != threads.size(); ++i) {
+        if (threads[i].joinable()) threads[i].join();
+    }
+
     return distances;
 }
 
@@ -59,8 +77,10 @@ std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomA
     [kmeans++](https://en.wikipedia.org/wiki/K-means%2B%2B) initialization algorithm.
 */
 template <typename RandomAccessIterator>
-std::vector<mean> random_plusplus(RandomAccessIterator begin, RandomAccessIterator end, uint32_t k,
-                                  uint64_t seed) {
+std::vector<mean> random_plusplus(RandomAccessIterator begin, RandomAccessIterator end,  //
+                                  const uint32_t k, const uint64_t seed,                 //
+                                  const uint64_t num_threads)                            //
+{
     assert(end > begin);
     const uint64_t num_points = end - begin;
     assert(k > 0);
@@ -89,7 +109,7 @@ std::vector<mean> random_plusplus(RandomAccessIterator begin, RandomAccessIterat
 
     for (uint32_t i = 1; i != k; ++i) {
         /* Calculate the distance to the closest mean for each data point */
-        auto distances = details::closest_distance(means, begin, end);
+        auto distances = details::closest_distance(means, begin, end, num_threads);
         /* Pick a random point weighted by the distance from existing means */
         std::discrete_distribution<uint64_t> generator(distances.begin(), distances.end());
         uint64_t index = generator(rand_engine);
@@ -125,17 +145,35 @@ std::pair<uint64_t, float_type> closest_mean(point const& point, std::vector<mea
 */
 template <typename RandomAccessIterator>
 std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAccessIterator end,
-                                         std::vector<mean> const& means) {
+                                         std::vector<mean> const& means,
+                                         const uint64_t num_threads) {
     assert(end > begin);
     const uint64_t num_points = end - begin;
     std::vector<uint32_t> clusters;
     clusters.resize(num_points);
-#pragma omp parallel for
-    for (uint64_t i = 0; i != num_points; ++i) {
-        auto const& point = *(begin + i);
-        uint32_t cluster_id = closest_mean(point, means).first;
-        clusters[i] = cluster_id;
+
+    auto worker = [&](uint64_t start, uint64_t end) {
+        for (uint64_t i = start; i != end; ++i) {
+            auto const& point = *(begin + i);
+            uint32_t cluster_id = closest_mean(point, means).first;
+            clusters[i] = cluster_id;
+        }
+    };
+
+    const uint64_t block_size = (num_points + num_threads - 1) / num_threads;
+    std::vector<std::thread> threads;
+    for (uint64_t t = 0; t != num_threads; ++t) {
+        uint64_t start = t * block_size;
+        uint64_t end = std::min(start + block_size, num_points);
+        if (start < end) {  // avoid empty range
+            threads.emplace_back(worker, start, end);
+        }
     }
+
+    for (uint64_t i = 0; i != threads.size(); ++i) {
+        if (threads[i].joinable()) threads[i].join();
+    }
+
     return clusters;
 }
 
@@ -204,7 +242,8 @@ struct clustering_parameters {
         , m_has_min_mse(false)
         , m_min_mse(0)
         , m_has_min_cluster_size(false)
-        , m_min_cluster_size(0) {}
+        , m_min_cluster_size(0)
+        , m_num_threads(1) {}
 
     void set_k(uint64_t k) {
         m_k = k;
@@ -236,6 +275,8 @@ struct clustering_parameters {
         m_has_min_cluster_size = true;
     }
 
+    void set_num_threads(uint64_t num_threads) { m_num_threads = num_threads; }
+
     bool has_k() const { return m_has_k; }
     bool has_max_iteration() const { return m_has_max_iter; }
     bool has_min_delta() const { return m_has_min_delta; }
@@ -247,6 +288,7 @@ struct clustering_parameters {
     uint64_t get_random_seed() const { return m_rand_seed; }
     double get_min_mse() const { return m_min_mse; }
     uint64_t get_min_cluster_size() const { return m_min_cluster_size; }
+    uint64_t get_num_threads() const { return m_num_threads; }
 
 private:
     bool m_has_k;
@@ -261,6 +303,7 @@ private:
     double m_min_mse;
     bool m_has_min_cluster_size;
     uint64_t m_min_cluster_size;
+    uint64_t m_num_threads;
 };
 
 struct cluster_data {
@@ -284,11 +327,13 @@ cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
     uint64_t seed = parameters.has_random_seed() ? parameters.get_random_seed() : rand_device();
 
     std::vector<mean> old_means;
-    data.means = details::random_plusplus(begin, end, parameters.get_k(), seed);
+    data.means = details::random_plusplus(begin, end, parameters.get_k(), seed,  //
+                                          parameters.get_num_threads());
 
     /* calculate new means until convergence is reached or we hit the maximum iteration count */
     do {
-        data.clusters = details::calculate_clusters(begin, end, data.means);
+        data.clusters = details::calculate_clusters(begin, end, data.means,  //
+                                                    parameters.get_num_threads());
         old_means = std::move(data.means);
         data.means =
             details::calculate_means(begin, end, data.clusters, old_means, parameters.get_k());

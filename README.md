@@ -36,20 +36,6 @@ For a testing environment, use the following instead:
     make -j
 
 
-Dependencies
-------------
-
-Parallelism is achieved via OpenMP.
-To install it, do
-
-	brew install libomp
-
-on a Mac, or
-
-	sudo apt install libomp
-
-on Linux.
-
 Examples
 --------
 
@@ -59,7 +45,7 @@ first 8 bytes encode the number of bytes per vector, say `p`; the next 8 bytes e
 of vectors in the collection, say `n`; we have then `p` bytes for vector (a total of `np` bytes).
 
 	./cluster -i vectors.bin -k 16 -d 0.0 -s 13 > labels.txt
-	
+
     ./cluster -i vectors.bin -m 7 -d 0.001 -s 13 --mse 500 --mcs 10 > labels.txt
-    
+
     ./cluster -i vectors.bin -m 7 -d 0.001 -s 13 --mse 50 --mcs 1 > labels.txt

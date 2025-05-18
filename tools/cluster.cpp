@@ -20,6 +20,7 @@ int main(int argc, char** argv) {
     parser.add("min_mse", "Minimum mean squared error (mse) (for kmeans_divisive).", "--mse",
                false);
     parser.add("min_cluster_size", "Minimum cluster size (for kmeans_divisive).", "--mcs", false);
+    parser.add("num_threads", "Number of threads (default is 1).", "-t", false);
 
     if (!parser.parse()) return 1;
 
@@ -73,6 +74,15 @@ int main(int argc, char** argv) {
             std::cerr << "Error: batch_size cannot be 0" << std::endl;
             return 1;
         }
+    }
+
+    if (parser.parsed("num_threads")) {
+        uint64_t num_threads = parser.get<uint64_t>("num_threads");
+        if (num_threads == 0) {
+            std::cerr << "Error: num_threads cannot be 0, defaulting to 1" << std::endl;
+            num_threads = 1;
+        }
+        params.set_num_threads(num_threads);
     }
 
     std::vector<point> points;
