@@ -7,6 +7,10 @@
 #include <queue>
 #include <limits>
 #include <thread>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
+#include "./thread_pool.hpp"
 
 namespace kmeans {
 
@@ -146,9 +150,10 @@ std::pair<uint64_t, float_type> closest_mean(point const& point, std::vector<mea
 template <typename RandomAccessIterator>
 std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAccessIterator end,
                                          std::vector<mean> const& means,
-                                         const uint64_t num_threads) {
+                                         thread_pool& threads) {
     assert(end > begin);
     const uint64_t num_points = end - begin;
+    const uint64_t num_threads = threads.num_threads();
     std::vector<uint32_t> clusters;
     clusters.resize(num_points);
 
@@ -161,18 +166,15 @@ std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAcces
     };
 
     const uint64_t block_size = (num_points + num_threads - 1) / num_threads;
-    std::vector<std::thread> threads;
     for (uint64_t t = 0; t != num_threads; ++t) {
         uint64_t start = t * block_size;
         uint64_t end = std::min(start + block_size, num_points);
         if (start < end) {  // avoid empty range
-            threads.emplace_back(worker, start, end);
+            threads.enqueue([&, start, end]{ worker(start, end); });
         }
     }
 
-    for (uint64_t i = 0; i != threads.size(); ++i) {
-        if (threads[i].joinable()) threads[i].join();
-    }
+    while (threads.working()){}
 
     return clusters;
 }
@@ -316,7 +318,8 @@ struct cluster_data {
 
 template <typename RandomAccessIterator>
 cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
-                          clustering_parameters const& parameters) {
+                          clustering_parameters const& parameters,
+                          thread_pool& threads) {
     assert(end > begin);
     assert(parameters.get_k() > 0);
     assert(end - begin >= parameters.get_k());
@@ -333,7 +336,7 @@ cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
     /* calculate new means until convergence is reached or we hit the maximum iteration count */
     do {
         data.clusters = details::calculate_clusters(begin, end, data.means,  //
-                                                    parameters.get_num_threads());
+                                                    threads);
         old_means = std::move(data.means);
         data.means =
             details::calculate_means(begin, end, data.clusters, old_means, parameters.get_k());
@@ -432,6 +435,7 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
     std::vector<cluster> atomic_clusters;
 
     std::cerr << " == min_cluster_size = " << parameters.get_min_cluster_size() << std::endl;
+    thread_pool threads(parameters.get_num_threads());
 
     while (!Q.empty()) {
         auto& c = Q.front();
@@ -466,7 +470,7 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
             kmeans_lloyd_params.set_k(2);
             auto data = kmeans_lloyd(iterator_adaptor(0, begin, c.indexes),
                                      iterator_adaptor(num_points_in_cluster, begin, c.indexes),
-                                     kmeans_lloyd_params);
+                                     kmeans_lloyd_params, threads);
             cluster c0(data.clusters.size());
             cluster c1(data.clusters.size());
             c0.centroid.swap(data.means[0]);
