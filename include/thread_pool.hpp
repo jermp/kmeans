@@ -9,11 +9,11 @@
 namespace kmeans {
 
 struct thread_pool {
-    thread_pool(size_t num_threads = thread::hardware_concurrency()) {
-        for (size_t i = 0; i < num_threads; ++i) {
+    thread_pool(uint32_t num_threads = thread::hardware_concurrency()) {
+        for (uint32_t i = 0; i < num_threads; ++i) {
             m_threads.emplace_back([this] {
                 while (true) {
-                    function<void()> task;
+                std::function<void()> task;
 
                     {
                     std::unique_lock<std::mutex> lock(m_queue_mutex);
