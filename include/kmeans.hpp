@@ -41,9 +41,10 @@ float_type distance(mean const& x, mean const& y) { return std::sqrt(distance_sq
 */
 template <typename RandomAccessIterator>
 std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomAccessIterator begin,
-                                         RandomAccessIterator end, const uint64_t num_threads) {
+                                         RandomAccessIterator end, thread_pool& threads) {
     assert(end > begin);
     const uint64_t num_points = end - begin;
+    const uint64_t num_threads = threads.num_threads();
     std::vector<float_type> distances;
     distances.resize(num_points);
 
@@ -60,18 +61,15 @@ std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomA
     };
 
     const uint64_t block_size = (num_points + num_threads - 1) / num_threads;
-    std::vector<std::thread> threads;
     for (uint64_t t = 0; t != num_threads; ++t) {
         uint64_t start = t * block_size;
         uint64_t end = std::min(start + block_size, num_points);
         if (start < end) {  // avoid empty range
-            threads.emplace_back(worker, start, end);
+            threads.enqueue([&, start, end] { worker(start, end); });
         }
     }
 
-    for (uint64_t i = 0; i != threads.size(); ++i) {
-        if (threads[i].joinable()) threads[i].join();
-    }
+    while (threads.working()) {}
 
     return distances;
 }
@@ -83,7 +81,7 @@ std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomA
 template <typename RandomAccessIterator>
 std::vector<mean> random_plusplus(RandomAccessIterator begin, RandomAccessIterator end,  //
                                   const uint32_t k, const uint64_t seed,                 //
-                                  const uint64_t num_threads)                            //
+                                  thread_pool& threads)                            //
 {
     assert(end > begin);
     const uint64_t num_points = end - begin;
@@ -113,7 +111,7 @@ std::vector<mean> random_plusplus(RandomAccessIterator begin, RandomAccessIterat
 
     for (uint32_t i = 1; i != k; ++i) {
         /* Calculate the distance to the closest mean for each data point */
-        auto distances = details::closest_distance(means, begin, end, num_threads);
+        auto distances = details::closest_distance(means, begin, end, threads);
         /* Pick a random point weighted by the distance from existing means */
         std::discrete_distribution<uint64_t> generator(distances.begin(), distances.end());
         uint64_t index = generator(rand_engine);
@@ -331,7 +329,7 @@ cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
 
     std::vector<mean> old_means;
     data.means = details::random_plusplus(begin, end, parameters.get_k(), seed,  //
-                                          parameters.get_num_threads());
+                                          threads);
 
     /* calculate new means until convergence is reached or we hit the maximum iteration count */
     do {

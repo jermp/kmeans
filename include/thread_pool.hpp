@@ -50,11 +50,11 @@ struct thread_pool {
         }
     }
 
-    bool working() {
+    bool working() const {
         return m_working != 0;
     }
 
-    uint32_t num_threads() {
+    uint32_t num_threads() const {
         return m_threads.size();
     }
 
