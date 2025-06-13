@@ -2,7 +2,8 @@
 
 A small, header-only, parallel implementation of kmeans clustering for arbitrary-long byte vectors.
 
-The code is inspired by the [dkm](https://github.com/genbattle/dkm) library.
+The code is inspired by the [dkm](https://github.com/genbattle/dkm) library, but then
+modified to use `std::thread` (rather than OpenMP) with a thread pool.
 
 
 Compiling the code

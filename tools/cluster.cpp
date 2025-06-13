@@ -105,8 +105,13 @@ int main(int argc, char** argv) {
         }
         std::cerr << "batch-" << batch << ": running kmeans for " << points.size() << " points"
                   << std::endl;
-        auto data = params.has_k() ? kmeans_lloyd(points.begin(), points.end(), params)
-                                   : kmeans_divisive(points.begin(), points.end(), params);
+        cluster_data data;
+        if (params.has_k()) {
+            thread_pool threads(params.get_num_threads());
+            data = kmeans_lloyd(points.begin(), points.end(), params, threads);
+        } else {
+            data = kmeans_divisive(points.begin(), points.end(), params);
+        }
         std::cerr << " == terminated after " << data.iterations << " iterations" << std::endl;
         for (auto c : data.clusters) std::cout << c << " ";
         std::cout << std::endl;

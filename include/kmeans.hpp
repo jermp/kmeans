@@ -1,16 +1,10 @@
 #pragma once
 
-#include <algorithm>
 #include <cassert>
 #include <random>
-#include <vector>
-#include <queue>
 #include <limits>
-#include <thread>
-#include <condition_variable>
-#include <functional>
-#include <mutex>
-#include "./thread_pool.hpp"
+
+#include "thread_pool.hpp"
 
 namespace kmeans {
 
@@ -81,7 +75,7 @@ std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomA
 template <typename RandomAccessIterator>
 std::vector<mean> random_plusplus(RandomAccessIterator begin, RandomAccessIterator end,  //
                                   const uint32_t k, const uint64_t seed,                 //
-                                  thread_pool& threads)                            //
+                                  thread_pool& threads)                                  //
 {
     assert(end > begin);
     const uint64_t num_points = end - begin;
@@ -147,8 +141,7 @@ std::pair<uint64_t, float_type> closest_mean(point const& point, std::vector<mea
 */
 template <typename RandomAccessIterator>
 std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAccessIterator end,
-                                         std::vector<mean> const& means,
-                                         thread_pool& threads) {
+                                         std::vector<mean> const& means, thread_pool& threads) {
     assert(end > begin);
     const uint64_t num_points = end - begin;
     const uint64_t num_threads = threads.num_threads();
@@ -168,11 +161,11 @@ std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAcces
         uint64_t start = t * block_size;
         uint64_t end = std::min(start + block_size, num_points);
         if (start < end) {  // avoid empty range
-            threads.enqueue([&, start, end]{ worker(start, end); });
+            threads.enqueue([&, start, end] { worker(start, end); });
         }
     }
 
-    while (threads.working()){}
+    while (threads.working()) {}
 
     return clusters;
 }
@@ -316,8 +309,7 @@ struct cluster_data {
 
 template <typename RandomAccessIterator>
 cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
-                          clustering_parameters const& parameters,
-                          thread_pool& threads) {
+                          clustering_parameters const& parameters, thread_pool& threads) {
     assert(end > begin);
     assert(parameters.get_k() > 0);
     assert(end - begin >= parameters.get_k());
