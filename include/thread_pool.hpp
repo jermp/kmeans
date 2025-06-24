@@ -11,7 +11,8 @@
 namespace kmeans {
 
 struct thread_pool {
-    thread_pool(const uint64_t num_threads = std::thread::hardware_concurrency())  //
+    thread_pool(const uint64_t num_threads)
+      : m_working(0)
     {
         for (uint64_t i = 0; i != num_threads; ++i) {
             m_threads.emplace_back([this] {
@@ -42,7 +43,7 @@ struct thread_pool {
         for (auto& thread : m_threads) thread.join();
     }
 
-    bool working() const { return m_working != 0; }
+    void wait() const { while (m_working != 0); }
 
     uint64_t num_threads() const { return m_threads.size(); }
 

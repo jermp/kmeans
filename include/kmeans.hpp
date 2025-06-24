@@ -63,7 +63,7 @@ std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomA
         }
     }
 
-    while (threads.working()) {}
+    threads.wait();
 
     return distances;
 }
@@ -165,7 +165,7 @@ std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAcces
         }
     }
 
-    while (threads.working()) {}
+    threads.wait();
 
     return clusters;
 }
