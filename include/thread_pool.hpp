@@ -43,7 +43,7 @@ struct thread_pool {
         for (auto& thread : m_threads) thread.join();
     }
 
-    bool working() const { return m_working != 0; }
+    void wait() const { while (m_working != 0); }
 
     uint64_t num_threads() const { return m_threads.size(); }
 
