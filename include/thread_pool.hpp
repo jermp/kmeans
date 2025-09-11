@@ -11,9 +11,7 @@
 namespace kmeans {
 
 struct thread_pool {
-    thread_pool(const uint64_t num_threads)
-      : m_working(0)
-    {
+    thread_pool(const uint64_t num_threads) : m_working(0) {
         for (uint64_t i = 0; i != num_threads; ++i) {
             m_threads.emplace_back([this] {
                 while (true) {
@@ -23,7 +21,7 @@ struct thread_pool {
                         std::unique_lock<std::mutex> lock(m_queue_mutex);
                         m_cv.wait(lock, [this] { return !m_tasks.empty() || m_stop; });
                         if (m_stop && m_tasks.empty()) return;
-                        task = move(m_tasks.front());
+                        task = std::move(m_tasks.front());
                         m_tasks.pop();
                     }
 
@@ -43,7 +41,10 @@ struct thread_pool {
         for (auto& thread : m_threads) thread.join();
     }
 
-    void wait() const { while (m_working != 0); }
+    void wait() const {
+        while (m_working != 0)
+            ;
+    }
 
     uint64_t num_threads() const { return m_threads.size(); }
 
@@ -51,7 +52,7 @@ struct thread_pool {
         m_working++;
         {
             std::unique_lock<std::mutex> lock(m_queue_mutex);
-            m_tasks.emplace(move(task));
+            m_tasks.emplace(std::move(task));
         }
         m_cv.notify_one();
     }
