@@ -36,41 +36,60 @@ float_type distance_squared(std::vector<T> const& x, std::vector<Q> const& y) {
 float_type distance(mean const& x, mean const& y) { return std::sqrt(distance_squared(x, y)); }
 
 /*
-    Calculate the smallest distance between each of the data points and any of the input means.
+    Compute the squared distance from each point to a single mean, in parallel.
 */
 template <typename RandomAccessIterator>
-std::vector<float_type> closest_distance(std::vector<mean> const& means, RandomAccessIterator begin,
-                                         RandomAccessIterator end, thread_pool& threads) {
+std::vector<float_type> distances_to_mean(mean const& m, RandomAccessIterator begin,
+                                          RandomAccessIterator end, thread_pool& threads) {
     assert(end > begin);
     const uint64_t num_points = end - begin;
     const uint64_t num_threads = threads.num_threads();
-    std::vector<float_type> distances;
-    distances.resize(num_points);
+    std::vector<float_type> distances(num_points);
 
-    auto worker = [&](uint64_t start, uint64_t end) {
-        for (uint64_t i = start; i != end; ++i) {
-            auto const& point = *(begin + i);
-            float_type closest = distance_squared(point, means.front());
-            for (auto const& mean : means) {
-                float_type distance = distance_squared(point, mean);
-                if (distance < closest) closest = distance;
-            }
-            distances[i] = closest;
+    auto worker = [&](uint64_t start, uint64_t stop) {
+        for (uint64_t i = start; i != stop; ++i) {
+            distances[i] = distance_squared(*(begin + i), m);
         }
     };
 
     const uint64_t block_size = (num_points + num_threads - 1) / num_threads;
     for (uint64_t t = 0; t != num_threads; ++t) {
         uint64_t start = t * block_size;
-        uint64_t end = std::min(start + block_size, num_points);
-        if (start < end) {  // avoid empty range
-            threads.enqueue([&, start, end] { worker(start, end); });
-        }
+        uint64_t stop = std::min(start + block_size, num_points);
+        if (start < stop) threads.enqueue([&, start, stop] { worker(start, stop); });
     }
-
     threads.wait();
-
     return distances;
+}
+
+/*
+    For each point, update its stored "distance to closest mean so far" by
+    taking the min with its squared distance to a newly added mean.
+    Used by k-means++ to avoid recomputing distances to every prior mean.
+*/
+template <typename RandomAccessIterator>
+void update_min_distances(std::vector<float_type>& distances, mean const& new_mean,
+                          RandomAccessIterator begin, RandomAccessIterator end,
+                          thread_pool& threads) {
+    assert(end > begin);
+    const uint64_t num_points = end - begin;
+    assert(distances.size() == num_points);
+    const uint64_t num_threads = threads.num_threads();
+
+    auto worker = [&](uint64_t start, uint64_t stop) {
+        for (uint64_t i = start; i != stop; ++i) {
+            float_type d = distance_squared(*(begin + i), new_mean);
+            if (d < distances[i]) distances[i] = d;
+        }
+    };
+
+    const uint64_t block_size = (num_points + num_threads - 1) / num_threads;
+    for (uint64_t t = 0; t != num_threads; ++t) {
+        uint64_t start = t * block_size;
+        uint64_t stop = std::min(start + block_size, num_points);
+        if (start < stop) threads.enqueue([&, start, stop] { worker(start, stop); });
+    }
+    threads.wait();
 }
 
 /*
@@ -108,16 +127,25 @@ std::vector<mean> random_plusplus(RandomAccessIterator begin, RandomAccessIterat
         means.push_back(m);
     }
 
+    /*
+        Maintain a running vector of squared distances from each point to its
+        closest mean so far. After adding a new mean we only need to compare
+        against that one mean, dropping init from O(N*k^2*d) to O(N*k*d).
+    */
+    auto distances = details::distances_to_mean(means.front(), begin, end, threads);
+
     for (uint32_t i = 1; i != k; ++i) {
-        /* Calculate the distance to the closest mean for each data point */
-        auto distances = details::closest_distance(means, begin, end, threads);
-        /* Pick a random point weighted by the distance from existing means */
+        /* Pick a random point weighted by squared distance from existing means */
         std::discrete_distribution<uint64_t> generator(distances.begin(), distances.end());
         uint64_t index = generator(rand_engine);
         m.clear();
         auto const& point = *(begin + index);
         for (auto x : point) m.push_back(float_type(x));
         means.push_back(m);
+
+        if (i + 1 != k) {
+            details::update_min_distances(distances, means.back(), begin, end, threads);
+        }
     }
 
     return means;
