@@ -6,7 +6,7 @@
     to "discover" those K clusters. Reports wall-clock time, the number
     of clusters actually found, total iterations and final MSE.
 
-    Usage: bench N threads K [d] [sigma] [seed]
+    Usage: bench N d K threads [sigma] [seed]
 */
 
 #include <chrono>
@@ -92,21 +92,22 @@ static double compute_mse(std::vector<point> const& points,
 }
 
 static void usage(const char* prog) {
-    std::cerr << "usage: " << prog << " N threads K [d=64] [sigma=15] [seed=42]\n"
+    std::cerr << "usage: " << prog << " N d K threads [sigma=15] [seed=42]\n"
               << "  N        number of points\n"
-              << "  threads  number of worker threads\n"
-              << "  K        target number of clusters (also # of true gaussian centers)\n";
+              << "  d        size (dimension) of each point vector\n"
+              << "  K        target number of clusters (also # of true gaussian centers)\n"
+              << "  threads  number of worker threads\n";
 }
 
 int main(int argc, char** argv) {
-    if (argc < 4) {
+    if (argc < 5) {
         usage(argv[0]);
         return 1;
     }
     const uint64_t N = std::strtoull(argv[1], nullptr, 10);
-    const uint64_t num_threads = std::strtoull(argv[2], nullptr, 10);
+    const uint64_t d = std::strtoull(argv[2], nullptr, 10);
     const uint64_t K = std::strtoull(argv[3], nullptr, 10);
-    const uint64_t d = (argc > 4) ? std::strtoull(argv[4], nullptr, 10) : 64;
+    const uint64_t num_threads = std::strtoull(argv[4], nullptr, 10);
     const double sigma = (argc > 5) ? std::strtod(argv[5], nullptr) : 15.0;
     const uint64_t seed = (argc > 6) ? std::strtoull(argv[6], nullptr, 10) : 42;
 
