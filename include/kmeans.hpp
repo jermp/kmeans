@@ -20,17 +20,25 @@ typedef std::vector<float_type> mean;
 namespace details {
 
 /*
-    Calculate the square of the distance between two points.
+    Calculate the square of the distance between two points. The pointer
+    overload is the hot one: __restrict__ + a runtime size lets the compiler
+    auto-vectorize cleanly with -march=native, which the std::vector form
+    sometimes blocks via aliasing concerns.
 */
 template <typename T, typename Q>
-float_type distance_squared(std::vector<T> const& x, std::vector<Q> const& y) {
-    assert(x.size() == y.size());
+float_type distance_squared(T const* __restrict__ x, Q const* __restrict__ y, std::size_t n) {
     float_type d_squared = 0;
-    for (uint64_t i = 0; i != x.size(); ++i) {
+    for (std::size_t i = 0; i < n; ++i) {
         float_type delta = float_type(x[i]) - float_type(y[i]);
         d_squared += delta * delta;
     }
     return d_squared;
+}
+
+template <typename T, typename Q>
+float_type distance_squared(std::vector<T> const& x, std::vector<Q> const& y) {
+    assert(x.size() == y.size());
+    return distance_squared(x.data(), y.data(), x.size());
 }
 
 float_type distance(mean const& x, mean const& y) { return std::sqrt(distance_squared(x, y)); }
@@ -450,7 +458,7 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
             c.centroid[i] = static_cast<double>(sum[i]) / c.indexes.size();
         }
 
-        Q.push(c);
+        Q.push(std::move(c));
     }
 
     uint64_t id = 0;
@@ -506,8 +514,8 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
                     c1.indexes.push_back(c.indexes[i]);
                 }
             }
-            Q.push(c0);
-            Q.push(c1);
+            Q.push(std::move(c0));
+            Q.push(std::move(c1));
         }
         Q.pop();
         data.iterations += 1;
