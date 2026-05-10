@@ -31,3 +31,6 @@ MESSAGE(STATUS "Compiling with flags:${CMAKE_CXX_FLAGS}")
 include_directories(include)
 
 add_executable(cluster tools/cluster.cpp)
+add_executable(bench tools/bench.cpp)
+target_link_libraries(bench PRIVATE pthread)
+target_link_libraries(cluster PRIVATE pthread)
