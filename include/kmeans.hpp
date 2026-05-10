@@ -20,17 +20,25 @@ typedef std::vector<float_type> mean;
 namespace details {
 
 /*
-    Calculate the square of the distance between two points.
+    Calculate the square of the distance between two points. The pointer
+    overload is the hot one: __restrict__ + a runtime size lets the compiler
+    auto-vectorize cleanly with -march=native, which the std::vector form
+    sometimes blocks via aliasing concerns.
 */
 template <typename T, typename Q>
-float_type distance_squared(std::vector<T> const& x, std::vector<Q> const& y) {
-    assert(x.size() == y.size());
+float_type distance_squared(T const* __restrict__ x, Q const* __restrict__ y, std::size_t n) {
     float_type d_squared = 0;
-    for (uint64_t i = 0; i != x.size(); ++i) {
+    for (std::size_t i = 0; i < n; ++i) {
         float_type delta = float_type(x[i]) - float_type(y[i]);
         d_squared += delta * delta;
     }
     return d_squared;
+}
+
+template <typename T, typename Q>
+float_type distance_squared(std::vector<T> const& x, std::vector<Q> const& y) {
+    assert(x.size() == y.size());
+    return distance_squared(x.data(), y.data(), x.size());
 }
 
 float_type distance(mean const& x, mean const& y) { return std::sqrt(distance_squared(x, y)); }
@@ -205,31 +213,90 @@ std::vector<uint32_t> calculate_clusters(RandomAccessIterator begin, RandomAcces
 
 /*
     Calculate means based on data points and their cluster assignments.
+
+    Parallelized via per-thread (k * point_size) accumulators and a final
+    reduction. Falls back to a serial path for small inputs / single-thread
+    pools, where the fork/join overhead would dominate (notably the
+    binary splits inside kmeans_divisive).
 */
 template <typename RandomAccessIterator>
 std::vector<mean> calculate_means(RandomAccessIterator begin, RandomAccessIterator end,
                                   std::vector<uint32_t> const& clusters,
-                                  std::vector<mean> const& old_means, uint32_t k) {
+                                  std::vector<mean> const& old_means, uint32_t k,
+                                  thread_pool& threads) {
     assert(end > begin);
     assert(clusters.size() == static_cast<uint64_t>(end - begin));
-    (void)end;  // silence, please!
 
+    const uint64_t num_points = end - begin;
     const uint64_t point_size = (*begin).size();
-    std::vector<mean> means(k, mean(point_size, 0.0));
-    std::vector<uint32_t> count(k, 0);
+    const uint64_t num_threads = threads.num_threads();
 
-    for (size_t i = 0; i != clusters.size(); ++i) {
-        auto& mean = means[clusters[i]];
-        count[clusters[i]] += 1;
-        auto const& point = *(begin + i);
-        for (size_t j = 0; j != point_size; ++j) mean[j] += point[j];
+    /* Serial fallback: small N or single-threaded pool. */
+    if (num_threads <= 1 || num_points < 4096) {
+        std::vector<mean> means(k, mean(point_size, 0.0));
+        std::vector<uint64_t> count(k, 0);
+        for (uint64_t i = 0; i != clusters.size(); ++i) {
+            uint32_t c = clusters[i];
+            count[c] += 1;
+            auto const& point = *(begin + i);
+            float_type* m = means[c].data();
+            for (uint64_t j = 0; j != point_size; ++j) m[j] += point[j];
+        }
+        for (uint32_t c = 0; c != k; ++c) {
+            if (count[c] == 0) {
+                means[c] = old_means[c];
+            } else {
+                float_type inv = float_type(1) / float_type(count[c]);
+                for (uint64_t j = 0; j != point_size; ++j) means[c][j] *= inv;
+            }
+        }
+        return means;
     }
 
-    for (size_t i = 0; i != k; ++i) {
-        if (count[i] == 0) {
-            means[i] = old_means[i];
+    /* Per-thread (k * point_size) flat sum buffers + per-thread k counts. */
+    std::vector<std::vector<float_type>> tl_sums(num_threads,
+                                                 std::vector<float_type>(k * point_size, 0));
+    std::vector<std::vector<uint64_t>> tl_counts(num_threads, std::vector<uint64_t>(k, 0));
+
+    auto worker = [&](uint64_t t, uint64_t start, uint64_t stop) {
+        float_type* sums = tl_sums[t].data();
+        uint64_t* counts = tl_counts[t].data();
+        for (uint64_t i = start; i != stop; ++i) {
+            uint32_t c = clusters[i];
+            counts[c] += 1;
+            auto const& point = *(begin + i);
+            float_type* row = sums + uint64_t(c) * point_size;
+            for (uint64_t j = 0; j != point_size; ++j) row[j] += point[j];
+        }
+    };
+
+    const uint64_t block_size = (num_points + num_threads - 1) / num_threads;
+    for (uint64_t t = 0; t != num_threads; ++t) {
+        uint64_t start = t * block_size;
+        uint64_t stop = std::min(start + block_size, num_points);
+        if (start < stop) threads.enqueue([&, t, start, stop] { worker(t, start, stop); });
+    }
+    threads.wait();
+
+    /* Reduce per-thread accumulators. */
+    std::vector<mean> means(k, mean(point_size, 0.0));
+    std::vector<uint64_t> count(k, 0);
+    for (uint64_t t = 0; t != num_threads; ++t) {
+        for (uint32_t c = 0; c != k; ++c) count[c] += tl_counts[t][c];
+        const float_type* sums = tl_sums[t].data();
+        for (uint32_t c = 0; c != k; ++c) {
+            float_type* dst = means[c].data();
+            const float_type* src = sums + uint64_t(c) * point_size;
+            for (uint64_t j = 0; j != point_size; ++j) dst[j] += src[j];
+        }
+    }
+
+    for (uint32_t c = 0; c != k; ++c) {
+        if (count[c] == 0) {
+            means[c] = old_means[c];
         } else {
-            for (size_t j = 0; j != point_size; ++j) means[i][j] /= count[i];
+            float_type inv = float_type(1) / float_type(count[c]);
+            for (uint64_t j = 0; j != point_size; ++j) means[c][j] *= inv;
         }
     }
 
@@ -361,8 +428,8 @@ cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
         data.clusters = details::calculate_clusters(begin, end, data.means,  //
                                                     threads);
         old_means = std::move(data.means);
-        data.means =
-            details::calculate_means(begin, end, data.clusters, old_means, parameters.get_k());
+        data.means = details::calculate_means(begin, end, data.clusters, old_means,
+                                              parameters.get_k(), threads);
         data.iterations += 1;
     } while (
         !(parameters.has_max_iteration() and data.iterations == parameters.get_max_iteration()) and
@@ -450,7 +517,7 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
             c.centroid[i] = static_cast<double>(sum[i]) / c.indexes.size();
         }
 
-        Q.push(c);
+        Q.push(std::move(c));
     }
 
     uint64_t id = 0;
@@ -506,8 +573,8 @@ cluster_data kmeans_divisive(RandomAccessIterator begin, RandomAccessIterator en
                     c1.indexes.push_back(c.indexes[i]);
                 }
             }
-            Q.push(c0);
-            Q.push(c1);
+            Q.push(std::move(c0));
+            Q.push(std::move(c1));
         }
         Q.pop();
         data.iterations += 1;
