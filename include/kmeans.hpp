@@ -407,6 +407,19 @@ struct cluster_data {
     std::vector<uint32_t> clusters;
 };
 
+/*
+    Lloyd's algorithm with Hamerly's triangle-inequality bounds.
+
+    Per point we keep an upper bound u[i] on its distance to its assigned
+    centre and a lower bound l[i] on its distance to the next-closest
+    centre. Per iteration we compute p[c] (how far each centre moved) and
+    s[c] (half the distance from c to its closest other centre); for each
+    point u[i] is loosened by p[a] and l[i] is tightened by max p[c'!=a],
+    and if u[i] <= max(s[a], l[i]) the point cannot have changed cluster
+    so we skip the full distance scan. When that fails we tighten u[i] to
+    the exact distance and try again, only computing all k distances when
+    necessary.
+*/
 template <typename RandomAccessIterator>
 cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
                           clustering_parameters const& parameters, thread_pool& threads) {
@@ -415,27 +428,129 @@ cluster_data kmeans_lloyd(RandomAccessIterator begin, RandomAccessIterator end,
     assert(end - begin >= parameters.get_k());
 
     cluster_data data;
-    data.num_clusters = parameters.get_k();
+    const uint32_t k = parameters.get_k();
+    const uint64_t num_points = end - begin;
+    data.num_clusters = k;
+
     std::random_device rand_device;
     uint64_t seed = parameters.has_random_seed() ? parameters.get_random_seed() : rand_device();
+    data.means = details::random_plusplus(begin, end, k, seed, threads);
+
+    std::vector<float_type> upper(num_points);
+    std::vector<float_type> lower(num_points);
+    data.clusters.assign(num_points, 0);
+
+    auto parallel_for = [&](auto&& body) {
+        const uint64_t nt = threads.num_threads();
+        const uint64_t block = (num_points + nt - 1) / nt;
+        for (uint64_t t = 0; t != nt; ++t) {
+            uint64_t s_idx = t * block;
+            uint64_t e_idx = std::min(s_idx + block, num_points);
+            if (s_idx < e_idx) threads.enqueue([&, s_idx, e_idx] { body(s_idx, e_idx); });
+        }
+        threads.wait();
+    };
+
+    /* Initial assignment: full scan for every point, populating clusters[],
+       upper[] (closest distance) and lower[] (second-closest distance). */
+    parallel_for([&](uint64_t start, uint64_t stop) {
+        for (uint64_t i = start; i != stop; ++i) {
+            auto const& point = *(begin + i);
+            float_type best = std::sqrt(details::distance_squared(point, data.means[0]));
+            uint32_t best_c = 0;
+            float_type second = std::numeric_limits<float_type>::infinity();
+            for (uint32_t c = 1; c != k; ++c) {
+                float_type d = std::sqrt(details::distance_squared(point, data.means[c]));
+                if (d < best) {
+                    second = best;
+                    best = d;
+                    best_c = c;
+                } else if (d < second) {
+                    second = d;
+                }
+            }
+            data.clusters[i] = best_c;
+            upper[i] = best;
+            lower[i] = second;
+        }
+    });
 
     std::vector<mean> old_means;
-    data.means = details::random_plusplus(begin, end, parameters.get_k(), seed,  //
-                                          threads);
+    std::vector<float_type> p(k);
+    std::vector<float_type> s(k);
 
-    /* calculate new means until convergence is reached or we hit the maximum iteration count */
-    do {
-        data.clusters = details::calculate_clusters(begin, end, data.means,  //
-                                                    threads);
+    while (true) {
         old_means = std::move(data.means);
-        data.means = details::calculate_means(begin, end, data.clusters, old_means,
-                                              parameters.get_k(), threads);
+        data.means = details::calculate_means(begin, end, data.clusters, old_means, k, threads);
         data.iterations += 1;
-    } while (
-        !(parameters.has_max_iteration() and data.iterations == parameters.get_max_iteration()) and
-        !(parameters.has_min_delta() and
-          details::deltas_below_limit(details::deltas(old_means, data.means),
-                                      parameters.get_min_delta())));
+
+        for (uint32_t c = 0; c != k; ++c) {
+            p[c] = std::sqrt(details::distance_squared(old_means[c], data.means[c]));
+        }
+
+        if ((parameters.has_max_iteration() and
+             data.iterations == parameters.get_max_iteration()) or
+            (parameters.has_min_delta() and
+             details::deltas_below_limit(p, parameters.get_min_delta()))) {
+            break;
+        }
+
+        /* Top two of p so we can use the second-largest movement when the
+           argmax happens to be the point's own cluster. */
+        uint32_t p_argmax = 0;
+        for (uint32_t c = 1; c != k; ++c)
+            if (p[c] > p[p_argmax]) p_argmax = c;
+        float_type p_max = p[p_argmax];
+        float_type p_max2 = 0;
+        for (uint32_t c = 0; c != k; ++c)
+            if (c != p_argmax and p[c] > p_max2) p_max2 = p[c];
+
+        /* s[c] = (1/2) * min over c' != c of ||means[c] - means[c']||. */
+        std::fill(s.begin(), s.end(), std::numeric_limits<float_type>::infinity());
+        for (uint32_t c0 = 0; c0 != k; ++c0) {
+            for (uint32_t c1 = c0 + 1; c1 != k; ++c1) {
+                float_type d = std::sqrt(details::distance_squared(data.means[c0], data.means[c1]));
+                if (d < s[c0]) s[c0] = d;
+                if (d < s[c1]) s[c1] = d;
+            }
+        }
+        for (uint32_t c = 0; c != k; ++c) s[c] *= 0.5f;
+
+        /* Bound update + reassignment. Most points hit the early-out and
+           skip distance computations entirely. */
+        parallel_for([&](uint64_t start, uint64_t stop) {
+            for (uint64_t i = start; i != stop; ++i) {
+                uint32_t a = data.clusters[i];
+                upper[i] += p[a];
+                lower[i] -= (a == p_argmax) ? p_max2 : p_max;
+
+                float_type m = std::max(s[a], lower[i]);
+                if (upper[i] <= m) continue;
+
+                auto const& point = *(begin + i);
+                upper[i] = std::sqrt(details::distance_squared(point, data.means[a]));
+                if (upper[i] <= m) continue;
+
+                float_type best = upper[i];
+                uint32_t best_c = a;
+                float_type second = std::numeric_limits<float_type>::infinity();
+                for (uint32_t c = 0; c != k; ++c) {
+                    if (c == a) continue;
+                    float_type d = std::sqrt(details::distance_squared(point, data.means[c]));
+                    if (d < best) {
+                        second = best;
+                        best = d;
+                        best_c = c;
+                    } else if (d < second) {
+                        second = d;
+                    }
+                }
+                data.clusters[i] = best_c;
+                upper[i] = best;
+                lower[i] = second;
+            }
+        });
+    }
 
     return data;
 }
